@@ -327,20 +327,29 @@ function Game({
     if (mode !== "ai" || state.finished) return;
     const botSeat = currentSeat?.botAccuracy ? currentSeat : null;
     if (!botSeat) return;
+    let resolvedPick: PlayerSummary | null = null;
+    let answerReady = false;
     const turn: TurnSnapshot = {
       seatId: botSeat.id,
       targetId: state.currentTarget.id,
       expiresAt: state.expiresAt
     };
+    const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
+    if (shouldHit) {
+      fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds)
+        .then((pick) => {
+          resolvedPick = pick;
+          answerReady = true;
+        })
+        .catch(() => {
+          answerReady = true;
+        });
+    }
     const timeout = window.setTimeout(async () => {
-      const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
-      if (shouldHit) {
-        const pick = await fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds);
-        if (!isSameTurn(turn)) return;
-        if (pick) {
-          await applyLocalGuess(pick.name, true, turn);
-          return;
-        }
+      if (!isSameTurn(turn)) return;
+      if (shouldHit && answerReady && resolvedPick) {
+        applyConfirmedGuess(resolvedPick, true, turn);
+        return;
       }
       await applyLocalGuess("Aaron James", true, turn);
     }, 2000 + Math.random() * 3000);
@@ -474,7 +483,14 @@ function Game({
       setMessage(`${seat.username} missed the link.`);
       return;
     }
-    const player = result.player;
+    applyConfirmedGuess(result.player, fromBot, turn);
+  }
+
+  function applyConfirmedGuess(player: PlayerSummary, fromBot = false, turn?: TurnSnapshot) {
+    const latest = stateRef.current;
+    if (turn && !isSameTurn(turn)) return;
+    const seat = latest.seats.find((item) => item.id === latest.currentSeatId);
+    if (!seat) return;
     setState((previous) => {
       if (turn && (previous.currentSeatId !== turn.seatId || previous.currentTarget.id !== turn.targetId || previous.expiresAt !== turn.expiresAt)) {
         return previous;

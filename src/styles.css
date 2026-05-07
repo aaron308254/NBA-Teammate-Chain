@@ -363,8 +363,8 @@ button:disabled {
 
 .seat-row {
   display: grid;
-  grid-template-columns: 4.4rem minmax(0, 1fr) 2rem;
-  align-items: end;
+  grid-template-columns: 4.8rem minmax(0, 1fr) 2rem;
+  align-items: start;
   gap: 0.7rem;
   min-height: 5.25rem;
   border-radius: 8px;
@@ -377,7 +377,8 @@ button:disabled {
 
 .seat-name {
   display: block;
-  width: 4.1rem;
+  width: min(7rem, max-content);
+  max-width: 7rem;
   margin-top: 0.24rem;
   color: oklch(88% 0.018 80 / 0.78);
   font-size: 0.76rem;
@@ -466,8 +467,9 @@ button:disabled {
 
 .bubble-track {
   position: relative;
-  align-self: center;
+  align-self: start;
   min-width: 0;
+  padding-top: 0.16rem;
 }
 
 .speech-bubble {

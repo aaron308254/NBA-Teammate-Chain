@@ -152,7 +152,7 @@ def leaderboard_response(user_id: str | None = None) -> dict[str, Any]:
 
 
 @app.get("/api/bootstrap")
-async def bootstrap(user_id: str | None = None) -> dict[str, Any]:
+def bootstrap(user_id: str | None = None) -> dict[str, Any]:
     return {
         "allPlayers": [player.model_dump() for player in nba.get_all_players()],
         "leaderboard": leaderboard_response(user_id),
@@ -160,31 +160,31 @@ async def bootstrap(user_id: str | None = None) -> dict[str, Any]:
 
 
 @app.get("/api/random-starter")
-async def random_starter() -> dict[str, Any]:
+def random_starter() -> dict[str, Any]:
     return nba.random_top_scorer().model_dump()
 
 
 @app.get("/api/suggest")
-async def suggest(q: str) -> dict[str, Any]:
+def suggest(q: str) -> dict[str, Any]:
     return {"players": [player.model_dump() for player in nba.suggest(q)]}
 
 
 @app.get("/api/teammates/{player_id}")
-async def teammates(player_id: int, used: str = "") -> dict[str, Any]:
+def teammates(player_id: int, used: str = "") -> dict[str, Any]:
     used_ids = {int(item) for item in used.split(",") if item.strip().isdigit()}
     players = [player for player in nba.get_teammates(player_id) if player.id not in used_ids]
     return {"players": [player.model_dump() for player in players]}
 
 
 @app.get("/api/bot-answer/{player_id}")
-async def bot_answer(player_id: int, used: str = "") -> dict[str, Any]:
+def bot_answer(player_id: int, used: str = "") -> dict[str, Any]:
     used_ids = {int(item) for item in used.split(",") if item.strip().isdigit()}
     player = nba.random_scoring_teammate(player_id, used_ids)
     return {"player": player.model_dump() if player else None}
 
 
 @app.post("/api/validate")
-async def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
+def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
     match = nba.find_player(request.guess)
     if not match:
         return {"valid": False, "reason": "unknown_player"}
