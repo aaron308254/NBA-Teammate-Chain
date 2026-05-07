@@ -57,33 +57,26 @@ button:disabled {
 .topbar {
   position: relative;
   z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1.2rem clamp(1rem, 4vw, 3rem);
-}
-
-.brand-lockup {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
-.brand-mark {
   display: grid;
-  width: 2.4rem;
-  height: 2.4rem;
-  place-items: center;
-  border-radius: 8px;
-  background: oklch(73% 0.18 58);
-  color: oklch(20% 0.045 250);
-  font-size: 0.86rem;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 1.15rem clamp(1rem, 4vw, 3rem) 0.5rem;
+}
+
+.home-title {
+  grid-column: 2;
+  margin: 0;
+  color: oklch(94% 0.018 80);
+  font-size: clamp(2.1rem, 5vw, 4.3rem);
+  font-weight: 950;
+  letter-spacing: 0;
+  text-align: center;
 }
 
 .auth-panel {
+  grid-column: 3;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -132,16 +125,21 @@ button:disabled {
   z-index: 1;
   display: grid;
   justify-items: center;
-  gap: clamp(1.3rem, 4vw, 2.5rem);
+  gap: clamp(0.8rem, 2.4vw, 1.5rem);
   align-items: start;
-  min-height: calc(100vh - 5.4rem);
-  padding: clamp(1.2rem, 6vh, 4rem) clamp(1rem, 5vw, 4rem) 4rem;
+  min-height: calc(100vh - 6rem);
+  padding: clamp(0.7rem, 2.8vh, 2rem) clamp(1rem, 5vw, 4rem) 3rem;
 }
 
 .home-actions {
   display: grid;
   justify-items: center;
-  width: min(50rem, 100%);
+  width: min(44rem, 100%);
+  border: 1px solid oklch(92% 0.02 85 / 0.16);
+  border-radius: 8px;
+  background: oklch(14% 0.035 260 / 0.78);
+  box-shadow: 0 22px 58px oklch(8% 0.04 250 / 0.28);
+  padding: clamp(1rem, 3vw, 1.45rem);
 }
 
 .action-row {
@@ -189,6 +187,27 @@ button:disabled {
   background: oklch(18% 0.035 260 / 0.72);
   padding: 1.25rem;
   box-shadow: 0 24px 70px oklch(10% 0.04 260 / 0.26);
+}
+
+.how-card {
+  width: min(42rem, 100%);
+  border: 1px solid oklch(92% 0.02 85 / 0.14);
+  border-radius: 8px;
+  background: oklch(18% 0.035 260 / 0.6);
+  padding: 1rem 1.15rem;
+  color: oklch(88% 0.018 80 / 0.76);
+}
+
+.how-card h2 {
+  margin: 0 0 0.35rem;
+  color: oklch(84% 0.12 58);
+  font-size: 1rem;
+}
+
+.how-card p {
+  max-width: 68ch;
+  margin: 0;
+  line-height: 1.55;
 }
 
 .panel-title,
@@ -414,9 +433,14 @@ button:disabled {
 }
 
 .timer-stack p,
-.target-player span,
 .table-message {
   color: oklch(88% 0.018 80 / 0.68);
+}
+
+.target-player span {
+  color: oklch(80% 0.14 58);
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+  font-weight: 850;
 }
 
 .target-player {
@@ -435,8 +459,11 @@ button:disabled {
 .guess-form {
   position: relative;
   display: grid;
-  width: min(42rem, 100%);
-  gap: 0.8rem;
+  grid-template-columns: minmax(16rem, 1fr) auto;
+  gap: 0.75rem;
+  width: min(48rem, 100%);
+  margin-top: clamp(1rem, 3vw, 1.8rem);
+  transform: translateX(-1.4rem);
 }
 
 .input-wrap {
@@ -483,8 +510,10 @@ button:disabled {
   position: absolute;
   z-index: 2;
   top: 3.9rem;
+  left: 0;
+  right: 11.5rem;
   display: grid;
-  width: 100%;
+  width: auto;
   overflow: hidden;
   border: 1px solid oklch(20% 0.04 260 / 0.12);
   border-radius: 8px;
@@ -595,7 +624,16 @@ button:disabled {
 }
 
 @media (max-width: 620px) {
-  .topbar,
+  .topbar {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .home-title,
+  .auth-panel {
+    grid-column: 1;
+  }
+
   .auth-panel,
   .action-row {
     align-items: stretch;
@@ -604,7 +642,17 @@ button:disabled {
 
   .auth-panel input,
   .primary-action,
-  .secondary-action {
+  .secondary-action,
+  .submit-button {
+    width: 100%;
+  }
+
+  .guess-form {
+    grid-template-columns: 1fr;
+    transform: none;
+  }
+
+  .suggestions {
     width: 100%;
   }
 

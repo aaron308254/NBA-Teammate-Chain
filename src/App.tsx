@@ -14,7 +14,12 @@ import type { AppUser, Leaderboard, PlayerSummary, RoomState, Seat } from "./typ
 
 const TURN_SECONDS = 15;
 const emptyLeaderboard: Leaderboard = { top: [], me: null };
-type SoundName = "tick" | "correct" | "wrong";
+type SoundName = "tick" | "correct" | "wrong" | "win";
+type TurnSnapshot = {
+  seatId: string;
+  targetId: number;
+  expiresAt: number;
+};
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -78,10 +83,7 @@ function Home({
     <main className="home-shell">
       <div className="court-aurora" />
       <header className="topbar">
-        <div className="brand-lockup">
-          <span className="brand-mark">TC</span>
-          <span>Teammate Chain</span>
-        </div>
+        <h1 className="home-title">TEAMMATES : NBA</h1>
         <div className="auth-panel">
           {user ? (
             <>
@@ -121,6 +123,14 @@ function Home({
         </div>
 
         <LeaderboardPanel leaderboard={leaderboard} user={user} />
+
+        <section className="how-card">
+          <h2>How it works</h2>
+          <p>
+            A top-75 all-time scorer starts the chain. On your turn, name one regular-season NBA teammate before the
+            clock hits zero. Repeats are blocked, wrong links eliminate you, and the last active player wins.
+          </p>
+        </section>
       </section>
     </main>
   );
@@ -240,11 +250,14 @@ function Game({
   const [guess, setGuess] = useState("");
   const [invalid, setInvalid] = useState(false);
   const [message, setMessage] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [now, setNow] = useState(Date.now() / 1000);
   const [humanCorrect, setHumanCorrect] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const submittedStatsRef = useRef(false);
   const lastTickRef = useRef<number | null>(null);
+  const stateRef = useRef(state);
+  const gameOverSoundRef = useRef(false);
 
   const youSeatId = state.youSeatId ?? state.seats.find((seat) => !seat.botAccuracy)?.id ?? state.seats[0]?.id;
   const currentSeat = state.seats.find((seat) => seat.id === state.currentSeatId);
@@ -271,6 +284,10 @@ function Game({
   }, []);
 
   useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
     if (mode !== "online" || !onlineSocket) return;
     const socket = onlineSocket;
     socketRef.current = onlineSocket;
@@ -281,8 +298,10 @@ function Game({
         return;
       }
       if (payload.currentTarget) {
+        stateRef.current = payload;
         setState(payload);
         setGuess("");
+        setShowSuggestions(false);
       }
     };
     return () => socket.close();
@@ -292,20 +311,26 @@ function Game({
     if (mode !== "ai" || state.finished) return;
     const botSeat = currentSeat?.botAccuracy ? currentSeat : null;
     if (!botSeat) return;
+    const turn: TurnSnapshot = {
+      seatId: botSeat.id,
+      targetId: state.currentTarget.id,
+      expiresAt: state.expiresAt
+    };
     const timeout = window.setTimeout(async () => {
       const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
       if (shouldHit) {
         const teammates = await fetchTeammates(state.currentTarget.id, state.usedPlayerIds);
+        if (!isSameTurn(turn)) return;
         const pick = teammates[Math.floor(Math.random() * teammates.length)];
         if (pick) {
-          await applyLocalGuess(pick.name, true);
+          await applyLocalGuess(pick.name, true, turn);
           return;
         }
       }
-      await applyLocalGuess("Wrong Answer", true);
+      await applyLocalGuess("Wrong Answer", true, turn);
     }, 900 + Math.random() * 1800);
     return () => window.clearTimeout(timeout);
-  }, [currentSeat?.id, mode, state.currentTarget.id, state.finished]);
+  }, [currentSeat?.id, mode, state.currentTarget.id, state.expiresAt, state.finished]);
 
   useEffect(() => {
     if (mode !== "ai" || state.finished || secondsLeft > 0 || !currentSeat) return;
@@ -324,6 +349,22 @@ function Game({
     lastTickRef.current = secondsLeft;
     playSound("tick");
   }, [playSound, secondsLeft, state.finished]);
+
+  useEffect(() => {
+    if (!state.finished || gameOverSoundRef.current) return;
+    gameOverSoundRef.current = true;
+    playSound("win");
+  }, [playSound, state.finished]);
+
+  function isSameTurn(turn: TurnSnapshot) {
+    const latest = stateRef.current;
+    return (
+      !latest.finished &&
+      latest.currentSeatId === turn.seatId &&
+      latest.currentTarget.id === turn.targetId &&
+      latest.expiresAt === turn.expiresAt
+    );
+  }
 
   function flashInvalid(nextMessage: string) {
     playSound("wrong");
@@ -356,37 +397,50 @@ function Game({
     return nextState;
   }
 
-  function eliminateLocal(seatId: string, reason: string) {
+  function eliminateLocal(seatId: string, reason: string, turn?: TurnSnapshot) {
+    if (turn && !isSameTurn(turn)) return;
     playSound("wrong");
     setState((previous) => {
+      if (turn && (previous.currentSeatId !== turn.seatId || previous.currentTarget.id !== turn.targetId || previous.expiresAt !== turn.expiresAt)) {
+        return previous;
+      }
       const seats = previous.seats.map((seat) =>
         seat.id === seatId ? { ...seat, active: false, eliminated_reason: reason } : seat
       );
-      return updateTurn({ ...previous, seats }, seats, seatId);
+      const nextState = updateTurn({ ...previous, seats }, seats, seatId);
+      stateRef.current = nextState;
+      return nextState;
     });
     setGuess("");
+    setShowSuggestions(false);
   }
 
-  async function applyLocalGuess(value: string, fromBot = false) {
-    const seat = currentSeat;
+  async function applyLocalGuess(value: string, fromBot = false, turn?: TurnSnapshot) {
+    const latest = stateRef.current;
+    if (turn && !isSameTurn(turn)) return;
+    const seat = latest.seats.find((item) => item.id === latest.currentSeatId);
     if (!seat) return;
     const localMatch = allPlayers.find((player) => normalize(player.name) === normalize(value));
-    if (localMatch && state.usedPlayerIds.includes(localMatch.id)) {
+    if (localMatch && latest.usedPlayerIds.includes(localMatch.id)) {
       if (!fromBot) flashInvalid("That player is already in the chain.");
       return;
     }
-    const result = await validateGuess(state.currentTarget.id, value, state.usedPlayerIds);
+    const result = await validateGuess(latest.currentTarget.id, value, latest.usedPlayerIds);
+    if (turn && !isSameTurn(turn)) return;
     if (!result.valid || !result.player) {
       if (result.reason === "repeat") {
         if (!fromBot) flashInvalid("No repeats in the chain.");
         return;
       }
-      eliminateLocal(seat.id, result.reason ?? "wrong");
+      eliminateLocal(seat.id, result.reason ?? "wrong", turn);
       setMessage(`${seat.username} missed the link.`);
       return;
     }
     const player = result.player;
     setState((previous) => {
+      if (turn && (previous.currentSeatId !== turn.seatId || previous.currentTarget.id !== turn.targetId || previous.expiresAt !== turn.expiresAt)) {
+        return previous;
+      }
       const seats = previous.seats.map((item) => (item.id === seat.id ? { ...item, correct: item.correct + 1 } : item));
       const nextState: RoomState = {
         ...previous,
@@ -395,25 +449,33 @@ function Game({
         currentTarget: player,
         usedPlayerIds: [...previous.usedPlayerIds, player.id]
       };
-      return updateTurn(nextState, seats, seat.id);
+      const updatedState = updateTurn(nextState, seats, seat.id);
+      stateRef.current = updatedState;
+      return updatedState;
     });
     if (!fromBot && seat.id === youSeatId) {
       setHumanCorrect((count) => count + 1);
     }
     playSound("correct");
     setGuess("");
+    setShowSuggestions(false);
     setMessage(`${player.name} is live.`);
   }
 
   async function submitGuess(event: FormEvent) {
     event.preventDefault();
     const value = guess.trim();
-    if (!value || !isYourTurn) return;
+    if (!value || !isYourTurn || !currentSeat) return;
+    setShowSuggestions(false);
     if (mode === "online" && socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ event: "guess", guess: value }));
       return;
     }
-    await applyLocalGuess(value);
+    await applyLocalGuess(value, false, {
+      seatId: currentSeat.id,
+      targetId: state.currentTarget.id,
+      expiresAt: state.expiresAt
+    });
   }
 
   const winner = state.seats.find((seat) => seat.id === state.winnerSeatId);
@@ -440,7 +502,7 @@ function Game({
         </div>
 
         <div className="target-player">
-          <span>Name a teammate of</span>
+          <span>Name a teammate of:</span>
           <h1>{state.currentTarget.name}</h1>
         </div>
 
@@ -459,15 +521,26 @@ function Game({
               <input
                 value={guess}
                 disabled={!isYourTurn}
-                onChange={(event) => setGuess(event.target.value)}
+                onChange={(event) => {
+                  setGuess(event.target.value);
+                  setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
                 placeholder={isYourTurn ? "Enter a teammate" : "Waiting for your turn"}
                 autoComplete="off"
               />
             </div>
-            {suggestions.length > 0 && isYourTurn ? (
+            {suggestions.length > 0 && isYourTurn && showSuggestions ? (
               <div className="suggestions">
                 {suggestions.map((player) => (
-                  <button type="button" key={player.id} onClick={() => setGuess(player.name)}>
+                  <button
+                    type="button"
+                    key={player.id}
+                    onClick={() => {
+                      setGuess(player.name);
+                      setShowSuggestions(false);
+                    }}
+                  >
                     {player.name}
                   </button>
                 ))}
@@ -537,17 +610,22 @@ export default function App() {
     const gain = context.createGain();
     gain.connect(context.destination);
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(name === "tick" ? 0.025 : 0.07, now + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + (name === "tick" ? 0.08 : 0.2));
+    gain.gain.exponentialRampToValueAtTime(name === "tick" ? 0.025 : 0.08, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + (name === "tick" ? 0.08 : name === "win" ? 0.46 : 0.2));
 
     const oscillator = context.createOscillator();
     oscillator.connect(gain);
     oscillator.type = name === "wrong" ? "sawtooth" : "sine";
-    oscillator.frequency.setValueAtTime(name === "correct" ? 660 : name === "wrong" ? 220 : 880, now);
+    oscillator.frequency.setValueAtTime(name === "correct" || name === "win" ? 660 : name === "wrong" ? 220 : 880, now);
     if (name === "correct") oscillator.frequency.exponentialRampToValueAtTime(990, now + 0.16);
+    if (name === "win") {
+      oscillator.frequency.setValueAtTime(660, now);
+      oscillator.frequency.setValueAtTime(880, now + 0.18);
+      oscillator.frequency.setValueAtTime(660, now + 0.32);
+    }
     if (name === "wrong") oscillator.frequency.exponentialRampToValueAtTime(130, now + 0.18);
     oscillator.start(now);
-    oscillator.stop(now + (name === "tick" ? 0.09 : 0.22));
+    oscillator.stop(now + (name === "tick" ? 0.09 : name === "win" ? 0.48 : 0.22));
   }
 
   async function startAiGame() {

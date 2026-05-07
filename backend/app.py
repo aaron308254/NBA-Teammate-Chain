@@ -379,17 +379,43 @@ async def queue_socket(websocket: WebSocket) -> None:
             if payload.get("event") != "guess" or room.current_seat().id != seat.id:
                 continue
             guess = str(payload.get("guess", ""))
+            turn_target_id = room.current_target.id
+            turn_expires_at = room.expires_at
             match = nba.find_player(guess)
             if not match:
+                if (
+                    room.finished
+                    or room.current_seat().id != seat.id
+                    or room.current_target.id != turn_target_id
+                    or room.expires_at != turn_expires_at
+                    or time.time() > turn_expires_at
+                ):
+                    continue
                 seat.active = False
                 seat.eliminated_reason = "unknown"
             elif match.id in room.used_player_ids:
                 await websocket.send_json({"event": "repeat", "player": match.model_dump()})
                 continue
             elif not nba.are_regular_season_teammates(room.current_target.id, match.id):
+                if (
+                    room.finished
+                    or room.current_seat().id != seat.id
+                    or room.current_target.id != turn_target_id
+                    or room.expires_at != turn_expires_at
+                    or time.time() > turn_expires_at
+                ):
+                    continue
                 seat.active = False
                 seat.eliminated_reason = "wrong"
             else:
+                if (
+                    room.finished
+                    or room.current_seat().id != seat.id
+                    or room.current_target.id != turn_target_id
+                    or room.expires_at != turn_expires_at
+                    or time.time() > turn_expires_at
+                ):
+                    continue
                 room.chain.append(room.current_target)
                 room.used_player_ids.add(match.id)
                 room.current_target = match
