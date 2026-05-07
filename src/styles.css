@@ -327,7 +327,7 @@ button:disabled {
 
 .game-shell {
   display: grid;
-  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr) minmax(12rem, 16rem);
+  grid-template-columns: minmax(16rem, 20rem) minmax(0, 1fr) minmax(12rem, 16rem);
   gap: 1rem;
   padding: clamp(0.8rem, 2vw, 1.3rem);
   transition: background 240ms ease-out;
@@ -363,19 +363,26 @@ button:disabled {
 
 .seat-row {
   display: grid;
-  grid-template-columns: 3.5rem minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.65rem;
-  min-height: 4.15rem;
+  grid-template-columns: 4.4rem minmax(0, 1fr) 2rem;
+  align-items: end;
+  gap: 0.7rem;
+  min-height: 5.25rem;
   border-radius: 8px;
   background: oklch(92% 0.02 85 / 0.075);
-  padding: 0.72rem;
+  padding: 0.8rem;
   transition:
     opacity 180ms ease-out,
     background-color 180ms ease-out;
 }
 
 .seat-name {
+  display: block;
+  width: 4.1rem;
+  margin-top: 0.24rem;
+  color: oklch(88% 0.018 80 / 0.78);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -388,7 +395,9 @@ button:disabled {
 
 .seat-avatar-wrap {
   position: relative;
-  min-height: 2.8rem;
+  display: grid;
+  justify-items: center;
+  min-height: 4rem;
 }
 
 .seat-avatar {
@@ -426,28 +435,63 @@ button:disabled {
   box-shadow: inset 0 -0.2rem 0 oklch(18% 0.05 260 / 0.22);
 }
 
+.jersey-0 .avatar-body {
+  background:
+    linear-gradient(90deg, transparent 42%, oklch(94% 0.02 85 / 0.45) 42% 58%, transparent 58%),
+    oklch(58% 0.2 28);
+}
+
+.jersey-1 .avatar-body {
+  background:
+    linear-gradient(90deg, transparent 42%, oklch(94% 0.02 85 / 0.45) 42% 58%, transparent 58%),
+    oklch(58% 0.17 148);
+}
+
+.jersey-2 .avatar-body {
+  background:
+    linear-gradient(90deg, transparent 42%, oklch(22% 0.04 80 / 0.24) 42% 58%, transparent 58%),
+    oklch(82% 0.17 92);
+}
+
+.jersey-3 .avatar-body {
+  background:
+    linear-gradient(90deg, transparent 42%, oklch(94% 0.02 85 / 0.45) 42% 58%, transparent 58%),
+    oklch(55% 0.17 255);
+}
+
 .seat-row.is-turn .seat-avatar {
   filter: saturate(1.15) brightness(1.2);
   transform: scale(1.22);
 }
 
+.bubble-track {
+  position: relative;
+  align-self: center;
+  min-width: 0;
+}
+
 .speech-bubble {
-  position: absolute;
-  left: 2.55rem;
-  top: -0.16rem;
+  position: relative;
   z-index: 2;
-  max-width: 8.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 11.6rem;
   min-width: 2.4rem;
+  min-height: 2.15rem;
   border: 1px solid oklch(92% 0.02 85 / 0.2);
   border-radius: 8px;
   background: oklch(92% 0.02 85 / 0.92);
   color: oklch(18% 0.035 260);
-  padding: 0.35rem 0.5rem;
-  font-size: 0.76rem;
+  padding: 0.38rem 0.56rem;
+  font-size: clamp(0.64rem, 0.7vw, 0.82rem);
   font-weight: 850;
   line-height: 1.15;
+  text-align: center;
   overflow-wrap: anywhere;
   box-shadow: 0 10px 24px oklch(8% 0.04 250 / 0.22);
+  animation: bubbleIn 140ms ease-out;
 }
 
 .speech-bubble::before {
@@ -459,6 +503,10 @@ button:disabled {
   background: inherit;
   transform: rotate(45deg);
   content: "";
+}
+
+.speech-bubble.thinking {
+  letter-spacing: 0.08em;
 }
 
 .speech-bubble.correct {
@@ -699,6 +747,17 @@ button:disabled {
   }
   75% {
     transform: translateX(8px);
+  }
+}
+
+@keyframes bubbleIn {
+  from {
+    opacity: 0;
+    transform: translateX(-0.3rem) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
   }
 }
 

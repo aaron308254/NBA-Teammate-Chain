@@ -256,6 +256,7 @@ function Game({
   const [message, setMessage] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [seatBubbles, setSeatBubbles] = useState<Record<string, SeatBubble>>({});
+  const [typingDotCount, setTypingDotCount] = useState(1);
   const [now, setNow] = useState(Date.now() / 1000);
   const [humanCorrect, setHumanCorrect] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
@@ -291,6 +292,13 @@ function Game({
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setTypingDotCount((count) => (count >= 3 ? 1 : count + 1));
+    }, 420);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (mode !== "online" || !onlineSocket) return;
@@ -380,11 +388,20 @@ function Game({
     window.setTimeout(() => setInvalid(false), 650);
   }
 
-  function markBubble(seatId: string, text: string, tone: SeatBubble["tone"]) {
+  function markBubble(seatId: string, text: string, tone: SeatBubble["tone"], autoClear = tone !== "thinking") {
     setSeatBubbles((previous) => ({
       ...previous,
       [seatId]: { text, tone }
     }));
+    if (!autoClear) return;
+    window.setTimeout(() => {
+      setSeatBubbles((previous) => {
+        if (previous[seatId]?.text !== text || previous[seatId]?.tone !== tone) return previous;
+        const next = { ...previous };
+        delete next[seatId];
+        return next;
+      });
+    }, 3000);
   }
 
   function nextActiveIndex(seats: Seat[], currentIndex: number) {
@@ -415,7 +432,7 @@ function Game({
     if (turn && !isSameTurn(turn)) return;
     playSound("wrong");
     if (!seatBubbles[seatId]) {
-      markBubble(seatId, reason === "time" ? "Time" : reason === "repeat" ? "Repeat" : "Wrong", "wrong");
+      markBubble(seatId, reason === "time" ? "Time" : "Repeat", "wrong");
     }
     setState((previous) => {
       if (turn && (previous.currentSeatId !== turn.seatId || previous.currentTarget.id !== turn.targetId || previous.expiresAt !== turn.expiresAt)) {
@@ -437,7 +454,7 @@ function Game({
     if (turn && !isSameTurn(turn)) return;
     const seat = latest.seats.find((item) => item.id === latest.currentSeatId);
     if (!seat) return;
-    markBubble(seat.id, value, "thinking");
+    markBubble(seat.id, value, "thinking", false);
     const localMatch = allPlayers.find((player) => normalize(player.name) === normalize(value));
     if (localMatch && latest.usedPlayerIds.includes(localMatch.id)) {
       if (!fromBot) flashInvalid("That player is already in the chain.");
@@ -513,23 +530,25 @@ function Game({
           <Crown size={18} />
           Players
         </div>
-        {state.seats.map((seat) => (
+        {state.seats.map((seat, index) => (
           <div
             className={`seat-row ${seat.active ? "" : "is-out"} ${seat.id === state.currentSeatId ? "is-turn" : ""}`}
             key={seat.id}
           >
             <div className="seat-avatar-wrap">
-              <div className="seat-avatar" aria-hidden="true">
+              <div className={`seat-avatar jersey-${index % 4}`} aria-hidden="true">
                 <span className="avatar-head" />
                 <span className="avatar-body" />
               </div>
+              <span className="seat-name">{seat.username}</span>
+            </div>
+            <div className="bubble-track">
               {seat.id === state.currentSeatId || seatBubbles[seat.id] ? (
                 <div className={`speech-bubble ${seatBubbles[seat.id]?.tone ?? "thinking"}`}>
-                  {seatBubbles[seat.id]?.text ?? "..."}
+                  {seatBubbles[seat.id]?.text ?? ".".repeat(typingDotCount)}
                 </div>
               ) : null}
             </div>
-            <span className="seat-name">{seat.username}</span>
             <strong>{seat.correct}</strong>
           </div>
         ))}
