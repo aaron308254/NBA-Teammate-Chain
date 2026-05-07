@@ -183,9 +183,7 @@ async def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
         return {"valid": False, "reason": "unknown_player"}
     if match.id in set(request.used_player_ids):
         return {"valid": False, "reason": "repeat", "player": match.model_dump()}
-    teammates = nba.get_teammates(request.current_player_id)
-    teammate_ids = {player.id for player in teammates}
-    if match.id not in teammate_ids:
+    if not nba.are_regular_season_teammates(request.current_player_id, match.id):
         return {"valid": False, "reason": "not_teammate", "player": match.model_dump()}
     return {"valid": True, "player": match.model_dump()}
 
@@ -388,7 +386,7 @@ async def queue_socket(websocket: WebSocket) -> None:
             elif match.id in room.used_player_ids:
                 await websocket.send_json({"event": "repeat", "player": match.model_dump()})
                 continue
-            elif match.id not in {player.id for player in nba.get_teammates(room.current_target.id)}:
+            elif not nba.are_regular_season_teammates(room.current_target.id, match.id):
                 seat.active = False
                 seat.eliminated_reason = "wrong"
             else:

@@ -14,6 +14,7 @@ import type { AppUser, Leaderboard, PlayerSummary, RoomState, Seat } from "./typ
 
 const TURN_SECONDS = 15;
 const emptyLeaderboard: Leaderboard = { top: [], me: null };
+type SoundName = "tick" | "correct" | "wrong";
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -106,13 +107,7 @@ function Home({
       </header>
 
       <section className="home-grid">
-        <div className="hero-copy">
-          <p className="eyebrow">NBA history, one locker room at a time</p>
-          <h1>Build the longest teammate chain before the clock cuts you.</h1>
-          <p>
-            Four players rotate through a live NBA teammate link. Name a valid teammate in 15 seconds, avoid repeats,
-            and stay alive until the last seat.
-          </p>
+        <div className="home-actions">
           <div className="action-row">
             <button className="primary-action" type="button" onClick={onQueue}>
               <Users size={20} />
@@ -228,6 +223,7 @@ function Game({
   user,
   mode,
   onlineSocket,
+  playSound,
   onExit,
   onStats
 }: {
@@ -236,6 +232,7 @@ function Game({
   user: AppUser | null;
   mode: "ai" | "online";
   onlineSocket: WebSocket | null;
+  playSound: (name: SoundName) => void;
   onExit: () => void;
   onStats: (user: AppUser, leaderboard: Leaderboard) => void;
 }) {
@@ -247,6 +244,7 @@ function Game({
   const [humanCorrect, setHumanCorrect] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const submittedStatsRef = useRef(false);
+  const lastTickRef = useRef<number | null>(null);
 
   const youSeatId = state.youSeatId ?? state.seats.find((seat) => !seat.botAccuracy)?.id ?? state.seats[0]?.id;
   const currentSeat = state.seats.find((seat) => seat.id === state.currentSeatId);
@@ -321,7 +319,14 @@ function Game({
     updateStats(user.id, won, humanCorrect).then((payload) => onStats(payload.user, payload.leaderboard));
   }, [humanCorrect, onStats, state.finished, state.winnerSeatId, user, youSeatId]);
 
+  useEffect(() => {
+    if (state.finished || secondsLeft <= 0 || lastTickRef.current === secondsLeft) return;
+    lastTickRef.current = secondsLeft;
+    playSound("tick");
+  }, [playSound, secondsLeft, state.finished]);
+
   function flashInvalid(nextMessage: string) {
+    playSound("wrong");
     setInvalid(true);
     setMessage(nextMessage);
     window.setTimeout(() => setInvalid(false), 650);
@@ -352,6 +357,7 @@ function Game({
   }
 
   function eliminateLocal(seatId: string, reason: string) {
+    playSound("wrong");
     setState((previous) => {
       const seats = previous.seats.map((seat) =>
         seat.id === seatId ? { ...seat, active: false, eliminated_reason: reason } : seat
@@ -394,6 +400,7 @@ function Game({
     if (!fromBot && seat.id === youSeatId) {
       setHumanCorrect((count) => count + 1);
     }
+    playSound("correct");
     setGuess("");
     setMessage(`${player.name} is live.`);
   }
@@ -412,7 +419,7 @@ function Game({
   const winner = state.seats.find((seat) => seat.id === state.winnerSeatId);
 
   return (
-    <main className="game-shell">
+    <main className={`game-shell ${isYourTurn ? "your-turn" : "waiting-turn"}`}>
       <section className="score-rail">
         <div className="rail-title">
           <Crown size={18} />
@@ -447,7 +454,7 @@ function Game({
           </div>
         ) : (
           <form className="guess-form" onSubmit={submitGuess}>
-            <div className={`input-wrap ${invalid ? "invalid" : ""}`}>
+            <div className={`input-wrap ${invalid ? "invalid" : ""} ${isYourTurn ? "" : "is-disabled"}`}>
               <Search size={19} />
               <input
                 value={guess}
@@ -504,6 +511,7 @@ export default function App() {
   const [initialState, setInitialState] = useState<RoomState | null>(null);
   const [mode, setMode] = useState<"ai" | "online">("ai");
   const [onlineSocket, setOnlineSocket] = useState<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     bootstrap(user?.id).then((payload) => {
@@ -517,7 +525,33 @@ export default function App() {
     localStorage.setItem("teammate-chain-user", JSON.stringify(nextUser));
   }
 
+  function playSound(name: SoundName) {
+    const AudioCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtor) return;
+    const context = audioContextRef.current ?? new AudioCtor();
+    audioContextRef.current = context;
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+    const now = context.currentTime;
+    const gain = context.createGain();
+    gain.connect(context.destination);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(name === "tick" ? 0.025 : 0.07, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + (name === "tick" ? 0.08 : 0.2));
+
+    const oscillator = context.createOscillator();
+    oscillator.connect(gain);
+    oscillator.type = name === "wrong" ? "sawtooth" : "sine";
+    oscillator.frequency.setValueAtTime(name === "correct" ? 660 : name === "wrong" ? 220 : 880, now);
+    if (name === "correct") oscillator.frequency.exponentialRampToValueAtTime(990, now + 0.16);
+    if (name === "wrong") oscillator.frequency.exponentialRampToValueAtTime(130, now + 0.18);
+    oscillator.start(now);
+    oscillator.stop(now + (name === "tick" ? 0.09 : 0.22));
+  }
+
   async function startAiGame() {
+    playSound("tick");
     const starter = await randomStarter();
     onlineSocket?.close();
     setOnlineSocket(null);
@@ -576,6 +610,7 @@ export default function App() {
         user={user}
         mode={mode}
         onlineSocket={onlineSocket}
+        playSound={playSound}
         onExit={() => {
           onlineSocket?.close();
           setOnlineSocket(null);
@@ -593,7 +628,10 @@ export default function App() {
     <Home
       user={user}
       leaderboard={leaderboard}
-      onQueue={() => setView("queue")}
+      onQueue={() => {
+        playSound("tick");
+        setView("queue");
+      }}
       onAi={startAiGame}
       onLogin={handleGoogleLogin}
       onUsername={handleUsername}

@@ -33,23 +33,113 @@ FALLBACK_PLAYERS = [
     PlayerSummary(id=1629029, name="Luka Doncic"),
 ]
 
+TOP_SCORER_FALLBACK_NAMES = [
+    "LeBron James",
+    "Kareem Abdul-Jabbar",
+    "Karl Malone",
+    "Kobe Bryant",
+    "Michael Jordan",
+    "Dirk Nowitzki",
+    "Wilt Chamberlain",
+    "Kevin Durant",
+    "Shaquille O'Neal",
+    "Carmelo Anthony",
+    "Moses Malone",
+    "Elvin Hayes",
+    "Hakeem Olajuwon",
+    "Oscar Robertson",
+    "Dominique Wilkins",
+    "Tim Duncan",
+    "Paul Pierce",
+    "John Havlicek",
+    "Kevin Garnett",
+    "Vince Carter",
+    "James Harden",
+    "Alex English",
+    "Reggie Miller",
+    "Jerry West",
+    "Patrick Ewing",
+    "Ray Allen",
+    "Allen Iverson",
+    "Russell Westbrook",
+    "Charles Barkley",
+    "Stephen Curry",
+    "Robert Parish",
+    "Adrian Dantley",
+    "Dwyane Wade",
+    "Elgin Baylor",
+    "Clyde Drexler",
+    "Gary Payton",
+    "Larry Bird",
+    "Hal Greer",
+    "Chris Paul",
+    "DeMar DeRozan",
+    "Walt Bellamy",
+    "Pau Gasol",
+    "Bob Pettit",
+    "David Robinson",
+    "George Gervin",
+    "LaMarcus Aldridge",
+    "Mitch Richmond",
+    "Joe Johnson",
+    "Kemba Walker",
+    "Tom Chambers",
+    "Antawn Jamison",
+    "John Stockton",
+    "Bernard King",
+    "Clifford Robinson",
+    "Walter Davis",
+    "Terry Cummings",
+    "Paul George",
+    "Bob Lanier",
+    "Eddie Johnson",
+    "Gail Goodrich",
+    "Reggie Theus",
+    "Dale Ellis",
+    "Scottie Pippen",
+    "Chet Walker",
+    "Isiah Thomas",
+    "Bob McAdoo",
+    "Zach Randolph",
+    "Kevin McHale",
+    "Magic Johnson",
+    "Mark Aguirre",
+    "Shawn Marion",
+    "Glen Rice",
+    "World Free",
+    "Kyrie Irving",
+    "Julius Erving",
+]
+
 FALLBACK_TEAMMATES: dict[int, list[int]] = {
-    2544: [101108, 201142, 201939, 203999],
-    101108: [2544, 201935, 201142],
-    201142: [201939, 101108, 201935, 2544],
+    2544: [201142, 201939],
+    201142: [201939, 201935, 2544],
     201939: [201142, 203507, 2544],
     201935: [201142, 101108],
-    893: [977, 406],
-    977: [893, 406],
-    406: [893, 977, 708],
-    1495: [708],
-    708: [1495, 406],
-    203999: [2544, 1629029],
-    1629029: [203999],
+    893: [],
+    977: [406],
+    406: [977, 708],
+    1495: [],
+    708: [406],
+    203999: [],
+    1629029: [],
     203507: [201939],
-    76003: [56],
-    56: [76003],
-    1717: [101108],
+    101108: [201935],
+    76003: [],
+    56: [],
+    1717: [],
+}
+
+FALLBACK_PLAYER_SEASONS: dict[int, set[tuple[int, str]]] = {
+    2544: {(1610612747, "2018-19"), (1610612744, "2024-25")},
+    201142: {(1610612744, "2016-17"), (1610612756, "2023-24")},
+    201939: {(1610612744, "2016-17"), (1610612744, "2024-25")},
+    201935: {(1610612745, "2017-18"), (1610612751, "2021-22")},
+    101108: {(1610612745, "2017-18"), (1610612756, "2023-24")},
+    977: {(1610612747, "2000-01")},
+    406: {(1610612747, "2000-01"), (1610612738, "2010-11")},
+    708: {(1610612738, "2010-11")},
+    203507: {(1610612744, "2024-25")},
 }
 
 
@@ -69,28 +159,35 @@ class NBADataService:
         self._all_players: list[PlayerSummary] | None = None
         self._top_scorers: list[PlayerSummary] | None = None
         self._teammate_cache_path = self.cache_dir / "teammates.json"
+        self._season_cache_path = self.cache_dir / "player_seasons.json"
         self._teammate_cache: dict[str, list[int]] = self._load_teammate_cache()
+        self._season_cache: dict[str, list[list[int | str]]] = self._load_json_cache(self._season_cache_path)
+
+    def _load_json_cache(self, path: Path) -> dict:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        return {}
 
     def _load_teammate_cache(self) -> dict[str, list[int]]:
-        if self._teammate_cache_path.exists():
-            return json.loads(self._teammate_cache_path.read_text(encoding="utf-8"))
-        return {}
+        return self._load_json_cache(self._teammate_cache_path)
 
     def _save_teammate_cache(self) -> None:
         self._teammate_cache_path.write_text(json.dumps(self._teammate_cache, indent=2), encoding="utf-8")
+
+    def _save_season_cache(self) -> None:
+        self._season_cache_path.write_text(json.dumps(self._season_cache, indent=2), encoding="utf-8")
 
     def get_all_players(self) -> list[PlayerSummary]:
         if self._all_players is not None:
             return self._all_players
         try:
-            from nba_api.stats.endpoints import commonallplayers
+            from nba_api.stats.static import players as static_players
 
-            response = commonallplayers.CommonAllPlayers(is_only_current_season=0, timeout=20)
-            frame = response.get_data_frames()[0]
+            frame = pd.DataFrame(static_players.get_players())
             players = [
-                PlayerSummary(id=int(row["PERSON_ID"]), name=str(row["DISPLAY_FIRST_LAST"]))
+                PlayerSummary(id=int(row["id"]), name=str(row["full_name"]))
                 for _, row in frame.iterrows()
-                if pd.notna(row.get("PERSON_ID")) and row.get("DISPLAY_FIRST_LAST")
+                if pd.notna(row.get("id")) and row.get("full_name")
             ]
             self._all_players = sorted(players, key=lambda player: player.name)
         except Exception:
@@ -123,10 +220,15 @@ class NBADataService:
                         if pd.notna(row.get(id_col)) and row.get(name_col)
                     ]
                     break
-            self._top_scorers = candidates or FALLBACK_PLAYERS
+            self._top_scorers = candidates or self._fallback_top_scorers()
         except Exception:
-            self._top_scorers = FALLBACK_PLAYERS
+            self._top_scorers = self._fallback_top_scorers()
         return self._top_scorers
+
+    def _fallback_top_scorers(self) -> list[PlayerSummary]:
+        by_name = {normalize_name(player.name): player for player in self.get_all_players()}
+        players = [by_name[normalize_name(name)] for name in TOP_SCORER_FALLBACK_NAMES if normalize_name(name) in by_name]
+        return players or FALLBACK_PLAYERS
 
     def random_top_scorer(self) -> PlayerSummary:
         return random.choice(self.get_top_scorers())
@@ -164,6 +266,9 @@ class NBADataService:
         return matches
 
     def _player_seasons(self, player_id: int) -> list[tuple[int, str]]:
+        cache_key = str(player_id)
+        if cache_key in self._season_cache:
+            return [(int(team_id), str(season)) for team_id, season in self._season_cache[cache_key]]
         from nba_api.stats.endpoints import playercareerstats
 
         response = playercareerstats.PlayerCareerStats(player_id=player_id, timeout=20)
@@ -174,7 +279,20 @@ class NBADataService:
             season_id = row.get("SEASON_ID")
             if pd.notna(team_id) and pd.notna(season_id) and int(team_id) > 0:
                 rows.append((int(team_id), str(season_id)))
+        self._season_cache[cache_key] = [[team_id, season] for team_id, season in rows]
+        self._save_season_cache()
         return rows
+
+    def are_regular_season_teammates(self, first_player_id: int, second_player_id: int) -> bool:
+        try:
+            first = set(self._player_seasons(first_player_id))
+            second = set(self._player_seasons(second_player_id))
+            return bool(first & second)
+        except Exception:
+            return bool(
+                FALLBACK_PLAYER_SEASONS.get(first_player_id, set())
+                & FALLBACK_PLAYER_SEASONS.get(second_player_id, set())
+            )
 
     def _team_roster(self, team_id: int, season: str) -> list[PlayerSummary]:
         from nba_api.stats.endpoints import commonteamroster
