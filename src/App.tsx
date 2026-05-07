@@ -24,6 +24,7 @@ type SeatBubble = {
   text: string;
   tone: "thinking" | "correct" | "wrong";
 };
+type GamePool = "all" | "current";
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -49,8 +50,8 @@ function Home({
 }: {
   user: AppUser | null;
   leaderboard: Leaderboard;
-  onQueue: () => void;
-  onAi: () => void;
+  onQueue: (gamePool: GamePool) => void;
+  onAi: (gamePool: GamePool) => void;
   onLogin: (credential: string) => void;
   onUsername: (value: string) => void;
 }) {
@@ -113,18 +114,21 @@ function Home({
       </header>
 
       <section className="home-grid">
-        <div className="home-actions">
-          <div className="action-row">
-            <button className="primary-action" type="button" onClick={onQueue}>
-              <Users size={20} />
-              Queue against other players
-            </button>
-            <button className="secondary-action" type="button" onClick={onAi}>
-              <Bot size={20} />
-              Play against AI
-            </button>
-          </div>
-        </div>
+        <ModeCard
+          title="Only Current Players (25-26)"
+          description="Answers can only be of teammates that played minutes in the 2025-2026 NBA season."
+          accent="current"
+          onQueue={() => onQueue("current")}
+          onAi={() => onAi("current")}
+        />
+
+        <ModeCard
+          title="Every Player Ever"
+          description="Answers can be of any teammate that played in the NBA."
+          accent="all"
+          onQueue={() => onQueue("all")}
+          onAi={() => onAi("all")}
+        />
 
         <LeaderboardPanel leaderboard={leaderboard} user={user} />
 
@@ -137,6 +141,39 @@ function Home({
         </section>
       </section>
     </main>
+  );
+}
+
+function ModeCard({
+  title,
+  description,
+  accent,
+  onQueue,
+  onAi
+}: {
+  title: string;
+  description: string;
+  accent: GamePool;
+  onQueue: () => void;
+  onAi: () => void;
+}) {
+  return (
+    <section className={`mode-section mode-${accent}`}>
+      <h2>{title}</h2>
+      <p>{description}</p>
+      <div className="home-actions">
+        <div className="action-row">
+          <button className="primary-action" type="button" onClick={onQueue}>
+            <Users size={20} />
+            Queue against other players
+          </button>
+          <button className="secondary-action" type="button" onClick={onAi}>
+            <Bot size={20} />
+            Play against AI
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -179,10 +216,12 @@ function LeaderboardPanel({ leaderboard, user }: { leaderboard: Leaderboard; use
 
 function QueueScreen({
   user,
+  gamePool,
   onCancel,
   onStarted
 }: {
   user: AppUser | null;
+  gamePool: GamePool;
   onCancel: () => void;
   onStarted: (state: RoomState, socket: WebSocket) => void;
 }) {
@@ -194,7 +233,10 @@ function QueueScreen({
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const username = encodeURIComponent(user?.username ?? "Player");
     const userId = encodeURIComponent(user?.id ?? "");
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/queue?username=${username}&userId=${userId}`);
+    const currentOnly = gamePool === "current" ? "true" : "false";
+    const socket = new WebSocket(
+      `${protocol}//${window.location.host}/ws/queue?username=${username}&userId=${userId}&currentOnly=${currentOnly}`
+    );
     socket.onmessage = (event) => {
       const payload = JSON.parse(event.data) as RoomState & { queued?: number; needed?: number };
       if (payload.event === "queued") {
@@ -209,7 +251,7 @@ function QueueScreen({
     return () => {
       if (!handedOffRef.current) socket.close();
     };
-  }, [onStarted, user?.id, user?.username]);
+  }, [gamePool, onStarted, user?.id, user?.username]);
 
   return (
     <main className="queue-screen">
@@ -234,6 +276,7 @@ function QueueScreen({
 function Game({
   initialState,
   allPlayers,
+  currentPlayers,
   user,
   mode,
   onlineSocket,
@@ -243,6 +286,7 @@ function Game({
 }: {
   initialState: RoomState;
   allPlayers: PlayerSummary[];
+  currentPlayers: PlayerSummary[];
   user: AppUser | null;
   mode: "ai" | "online";
   onlineSocket: WebSocket | null;
@@ -268,12 +312,15 @@ function Game({
   const youSeatId = state.youSeatId ?? state.seats.find((seat) => !seat.botAccuracy)?.id ?? state.seats[0]?.id;
   const currentSeat = state.seats.find((seat) => seat.id === state.currentSeatId);
   const isYourTurn = currentSeat?.id === youSeatId && !state.finished;
+  const gamePool = state.gameMode ?? "all";
+  const isCurrentPool = gamePool === "current";
+  const playablePlayers = isCurrentPool && currentPlayers.length ? currentPlayers : allPlayers;
   const secondsLeft = Math.max(0, Math.ceil(state.expiresAt - now));
 
   const suggestions = useMemo(() => {
     const needle = normalize(guess);
     if (needle.length < 2) return [];
-    return allPlayers
+    return playablePlayers
       .filter((player) => {
         const parts = player.name.split(" ");
         const first = normalize(parts[0] ?? "");
@@ -282,7 +329,7 @@ function Game({
         return first.startsWith(needle) || last.startsWith(needle) || full.includes(needle);
       })
       .slice(0, 7);
-  }, [allPlayers, guess]);
+  }, [guess, playablePlayers]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now() / 1000), 200);
@@ -333,7 +380,7 @@ function Game({
       expiresAt: state.expiresAt
     };
     const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
-    const answerPromise = shouldHit ? fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds).catch(() => null) : null;
+    const answerPromise = shouldHit ? fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds, isCurrentPool).catch(() => null) : null;
     const timeout = window.setTimeout(async () => {
       if (!isSameTurn(turn)) return;
       const resolvedPick = answerPromise ? await answerPromise : null;
@@ -345,7 +392,7 @@ function Game({
       await applyLocalGuess(randomBotMissGuess(), true, turn);
     }, 2000 + Math.random() * 3000);
     return () => window.clearTimeout(timeout);
-  }, [currentSeat?.id, mode, state.currentTarget.id, state.expiresAt, state.finished]);
+  }, [currentSeat?.id, isCurrentPool, mode, state.currentTarget.id, state.expiresAt, state.finished]);
 
   useEffect(() => {
     if (mode !== "ai" || state.finished || secondsLeft > 0 || !currentSeat) return;
@@ -406,8 +453,8 @@ function Game({
 
   function randomBotMissGuess() {
     const usedIds = new Set(stateRef.current.usedPlayerIds);
-    const candidates = allPlayers.filter((player) => !usedIds.has(player.id));
-    const pool = candidates.length ? candidates : allPlayers;
+    const candidates = playablePlayers.filter((player) => !usedIds.has(player.id));
+    const pool = candidates.length ? candidates : playablePlayers;
     return pool[Math.floor(Math.random() * pool.length)]?.name ?? "Michael Jordan";
   }
 
@@ -469,7 +516,7 @@ function Game({
       markBubble(seat.id, value, "wrong");
       return;
     }
-    const result = await validateGuess(latest.currentTarget.id, value, latest.usedPlayerIds);
+    const result = await validateGuess(latest.currentTarget.id, value, latest.usedPlayerIds, latest.gameMode === "current");
     if (turn && !isSameTurn(turn)) return;
     if (!result.valid || !result.player) {
       if (result.reason === "repeat") {
@@ -570,6 +617,9 @@ function Game({
       </section>
 
       <section className="play-area">
+        <div className={`game-mode-title ${isCurrentPool ? "current" : "all"}`}>
+          {isCurrentPool ? "Current Players" : "All Players"}
+        </div>
         <div className="timer-stack">
           <div className={`timer ${secondsLeft <= 5 ? "danger" : ""}`}>{secondsLeft}</div>
           <p>{currentSeat ? `${currentSeat.username}'s turn` : "Game complete"}</p>
@@ -650,6 +700,7 @@ function Game({
 export default function App() {
   const [view, setView] = useState<"home" | "queue" | "game">("home");
   const [allPlayers, setAllPlayers] = useState<PlayerSummary[]>([]);
+  const [currentPlayers, setCurrentPlayers] = useState<PlayerSummary[]>([]);
   const [leaderboard, setLeaderboard] = useState<Leaderboard>(emptyLeaderboard);
   const [user, setUser] = useState<AppUser | null>(() => {
     const raw = localStorage.getItem("teammate-chain-user");
@@ -657,12 +708,14 @@ export default function App() {
   });
   const [initialState, setInitialState] = useState<RoomState | null>(null);
   const [mode, setMode] = useState<"ai" | "online">("ai");
+  const [gamePool, setGamePool] = useState<GamePool>("all");
   const [onlineSocket, setOnlineSocket] = useState<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     bootstrap(user?.id).then((payload) => {
       setAllPlayers(payload.allPlayers);
+      setCurrentPlayers(payload.currentPlayers);
       setLeaderboard(payload.leaderboard);
     });
   }, [user?.id]);
@@ -702,9 +755,9 @@ export default function App() {
     oscillator.stop(now + (name === "tick" ? 0.09 : name === "win" ? 0.48 : 0.22));
   }
 
-  async function startAiGame() {
+  async function startAiGame(nextGamePool: GamePool) {
     playSound("tick");
-    const starter = await randomStarter();
+    const starter = await randomStarter(nextGamePool === "current");
     onlineSocket?.close();
     setOnlineSocket(null);
     const seats = [
@@ -714,8 +767,10 @@ export default function App() {
       makeSeat("Archivist 90", 0.9)
     ].sort(() => Math.random() - 0.5);
     setMode("ai");
+    setGamePool(nextGamePool);
     setInitialState({
       event: "state",
+      gameMode: nextGamePool,
       seats,
       currentSeatId: seats[Math.floor(Math.random() * seats.length)].id,
       currentTarget: starter,
@@ -743,6 +798,7 @@ export default function App() {
     return (
       <QueueScreen
         user={user}
+        gamePool={gamePool}
         onCancel={() => setView("home")}
         onStarted={(state, socket) => {
           setMode("online");
@@ -759,6 +815,7 @@ export default function App() {
       <Game
         initialState={initialState}
         allPlayers={allPlayers}
+        currentPlayers={currentPlayers}
         user={user}
         mode={mode}
         onlineSocket={onlineSocket}
@@ -780,8 +837,9 @@ export default function App() {
     <Home
       user={user}
       leaderboard={leaderboard}
-      onQueue={() => {
+      onQueue={(nextGamePool) => {
         playSound("tick");
+        setGamePool(nextGamePool);
         setView("queue");
       }}
       onAi={startAiGame}

@@ -13,23 +13,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function bootstrap(userId?: string): Promise<{ allPlayers: PlayerSummary[]; leaderboard: Leaderboard }> {
+export async function bootstrap(userId?: string): Promise<{
+  allPlayers: PlayerSummary[];
+  currentPlayers: PlayerSummary[];
+  leaderboard: Leaderboard;
+}> {
   const suffix = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
   return request(`/api/bootstrap${suffix}`);
 }
 
-export async function randomStarter(): Promise<PlayerSummary> {
-  return request("/api/random-starter");
+export async function randomStarter(currentOnly = false): Promise<PlayerSummary> {
+  return request(`/api/random-starter?currentOnly=${currentOnly ? "true" : "false"}`);
 }
 
 export async function validateGuess(
   currentPlayerId: number,
   guess: string,
-  usedPlayerIds: number[]
+  usedPlayerIds: number[],
+  currentOnly = false
 ): Promise<{ valid: boolean; reason?: string; player?: PlayerSummary }> {
   return request("/api/validate", {
     method: "POST",
-    body: JSON.stringify({ current_player_id: currentPlayerId, guess, used_player_ids: usedPlayerIds })
+    body: JSON.stringify({ current_player_id: currentPlayerId, guess, used_player_ids: usedPlayerIds, current_only: currentOnly })
   });
 }
 
@@ -39,9 +44,11 @@ export async function fetchTeammates(playerId: number, usedIds: number[]): Promi
   return payload.players;
 }
 
-export async function fetchBotAnswer(playerId: number, usedIds: number[]): Promise<PlayerSummary | null> {
+export async function fetchBotAnswer(playerId: number, usedIds: number[], currentOnly = false): Promise<PlayerSummary | null> {
   const used = usedIds.join(",");
-  const payload = await request<{ player: PlayerSummary | null }>(`/api/bot-answer/${playerId}?used=${used}`);
+  const payload = await request<{ player: PlayerSummary | null }>(
+    `/api/bot-answer/${playerId}?used=${used}&currentOnly=${currentOnly ? "true" : "false"}`
+  );
   return payload.player;
 }
 

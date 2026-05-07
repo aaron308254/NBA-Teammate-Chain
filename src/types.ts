@@ -34,6 +34,7 @@ export type Seat = {
 export type RoomState = {
   event: string;
   roomId?: string;
+  gameMode?: "all" | "current";
   message?: string | null;
   seats: Seat[];
   currentSeatId: string | null;

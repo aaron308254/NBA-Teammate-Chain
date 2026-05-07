@@ -67,6 +67,7 @@ class ValidateGuessRequest(BaseModel):
     current_player_id: int
     guess: str
     used_player_ids: list[int] = []
+    current_only: bool = False
 
 
 class GoogleAuthRequest(BaseModel):
@@ -155,13 +156,14 @@ def leaderboard_response(user_id: str | None = None) -> dict[str, Any]:
 def bootstrap(user_id: str | None = None) -> dict[str, Any]:
     return {
         "allPlayers": [player.model_dump() for player in nba.get_all_players()],
+        "currentPlayers": [player.model_dump() for player in nba.get_current_players()],
         "leaderboard": leaderboard_response(user_id),
     }
 
 
 @app.get("/api/random-starter")
-def random_starter() -> dict[str, Any]:
-    return nba.random_top_scorer().model_dump()
+def random_starter(currentOnly: bool = False) -> dict[str, Any]:
+    return nba.random_top_scorer(currentOnly).model_dump()
 
 
 @app.get("/api/suggest")
@@ -177,9 +179,9 @@ def teammates(player_id: int, used: str = "") -> dict[str, Any]:
 
 
 @app.get("/api/bot-answer/{player_id}")
-def bot_answer(player_id: int, used: str = "") -> dict[str, Any]:
+def bot_answer(player_id: int, used: str = "", currentOnly: bool = False) -> dict[str, Any]:
     used_ids = {int(item) for item in used.split(",") if item.strip().isdigit()}
-    player = nba.random_scoring_teammate(player_id, used_ids)
+    player = nba.random_scoring_teammate(player_id, used_ids, current_only=currentOnly)
     return {"player": player.model_dump() if player else None}
 
 
@@ -205,9 +207,9 @@ def debug_teammate_check(player1: str, player2: str, refresh: bool = False) -> d
 
 
 @app.get("/api/debug/bot-answer/{player_id}")
-def debug_bot_answer(player_id: int, used: str = "", samples: int = 8) -> dict[str, Any]:
+def debug_bot_answer(player_id: int, used: str = "", samples: int = 8, currentOnly: bool = False) -> dict[str, Any]:
     used_ids = {int(item) for item in used.split(",") if item.strip().isdigit()}
-    return nba.debug_bot_answer(player_id, used_ids, samples)
+    return nba.debug_bot_answer(player_id, used_ids, samples, currentOnly)
 
 
 @app.post("/api/validate")
@@ -215,6 +217,8 @@ def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
     match = nba.find_player(request.guess)
     if not match:
         return {"valid": False, "reason": "unknown_player"}
+    if request.current_only and not nba.is_current_player(match.id):
+        return {"valid": False, "reason": "not_current", "player": match.model_dump()}
     if match.id in set(request.used_player_ids):
         return {"valid": False, "reason": "repeat", "player": match.model_dump()}
     if not nba.are_regular_season_teammates(request.current_player_id, match.id):
@@ -282,6 +286,7 @@ class Room:
     seats: list[Seat]
     current_target: PlayerSummary
     used_player_ids: set[int]
+    current_only: bool = False
     chain: list[PlayerSummary] = field(default_factory=list)
     turn_index: int = 0
     expires_at: float = 0
@@ -308,7 +313,7 @@ class Room:
                 return
 
 
-waiting: list[tuple[WebSocket, Seat]] = []
+waiting: list[tuple[WebSocket, Seat, bool]] = []
 rooms: dict[str, Room] = {}
 
 
@@ -322,6 +327,7 @@ def room_payload(room: Room, event: str = "state", message: str | None = None) -
         "currentTarget": room.current_target.model_dump(),
         "chain": [player.model_dump() for player in room.chain],
         "usedPlayerIds": list(room.used_player_ids),
+        "gameMode": "current" if room.current_only else "all",
         "expiresAt": room.expires_at,
         "finished": room.finished,
         "winnerSeatId": room.active_seats()[0].id if room.finished and room.active_seats() else None,
@@ -375,14 +381,15 @@ async def start_room_timer(room: Room) -> None:
     room.timer_task = asyncio.create_task(expire())
 
 
-async def create_room(group: list[tuple[WebSocket, Seat]]) -> None:
+async def create_room(group: list[tuple[WebSocket, Seat, bool]], current_only: bool) -> None:
     random.shuffle(group)
     room = Room(
         id=str(uuid.uuid4()),
-        sockets={seat.id: socket for socket, seat in group},
-        seats=[seat for _, seat in group],
-        current_target=nba.random_top_scorer(),
+        sockets={seat.id: socket for socket, seat, _ in group},
+        seats=[seat for _, seat, _ in group],
+        current_target=nba.random_top_scorer(current_only),
         used_player_ids=set(),
+        current_only=current_only,
         turn_index=random.randrange(4),
     )
     room.used_player_ids.add(room.current_target.id)
@@ -398,13 +405,24 @@ async def queue_socket(websocket: WebSocket) -> None:
         username=websocket.query_params.get("username") or "Player",
         user_id=websocket.query_params.get("userId"),
     )
-    waiting.append((websocket, seat))
+    current_only = websocket.query_params.get("currentOnly", "").lower() in {"1", "true", "yes"}
+    waiting.append((websocket, seat, current_only))
     try:
-        await websocket.send_json({"event": "queued", "queued": len(waiting), "needed": 4, "youSeatId": seat.id})
-        if len(waiting) >= 4:
-            group = waiting[:4]
-            del waiting[:4]
-            await create_room(group)
+        queued_same_mode = [entry for entry in waiting if entry[2] == current_only]
+        await websocket.send_json(
+            {
+                "event": "queued",
+                "queued": len(queued_same_mode),
+                "needed": 4,
+                "youSeatId": seat.id,
+                "gameMode": "current" if current_only else "all",
+            }
+        )
+        if len(queued_same_mode) >= 4:
+            group = queued_same_mode[:4]
+            group_ids = {queued_seat.id for _, queued_seat, _ in group}
+            waiting[:] = [entry for entry in waiting if entry[1].id not in group_ids]
+            await create_room(group, current_only)
         while True:
             payload = await websocket.receive_json()
             room = next((candidate for candidate in rooms.values() if seat.id in candidate.sockets), None)
@@ -430,6 +448,17 @@ async def queue_socket(websocket: WebSocket) -> None:
             elif match.id in room.used_player_ids:
                 await websocket.send_json({"event": "repeat", "player": match.model_dump()})
                 continue
+            elif room.current_only and not nba.is_current_player(match.id):
+                if (
+                    room.finished
+                    or room.current_seat().id != seat.id
+                    or room.current_target.id != turn_target_id
+                    or room.expires_at != turn_expires_at
+                    or time.time() > turn_expires_at
+                ):
+                    continue
+                seat.active = False
+                seat.eliminated_reason = "not_current"
             elif not nba.are_regular_season_teammates(room.current_target.id, match.id):
                 if (
                     room.finished
@@ -460,7 +489,11 @@ async def queue_socket(websocket: WebSocket) -> None:
             room.advance_turn()
             await start_room_timer(room)
     except WebSocketDisconnect:
-        waiting[:] = [(socket, queued_seat) for socket, queued_seat in waiting if queued_seat.id != seat.id]
+        waiting[:] = [
+            (socket, queued_seat, queued_current_only)
+            for socket, queued_seat, queued_current_only in waiting
+            if queued_seat.id != seat.id
+        ]
         room = next((candidate for candidate in rooms.values() if seat.id in candidate.sockets), None)
         if room and not room.finished:
             seat.active = False

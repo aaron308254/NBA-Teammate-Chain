@@ -227,9 +227,11 @@ class NBADataService:
         self._teammate_cache_path = self.cache_dir / "teammates.json"
         self._season_cache_path = self.cache_dir / "player_seasons.json"
         self._scoring_cache_path = self.cache_dir / "team_scoring.json"
+        self._current_players_cache_path = self.cache_dir / "current_players_2025_26.json"
         self._teammate_cache: dict[str, list[int]] = self._load_teammate_cache()
         self._season_cache: dict[str, list[list[int | str]]] = self._load_json_cache(self._season_cache_path)
         self._scoring_cache: dict[str, list[dict[str, int | float | str]]] = self._load_json_cache(self._scoring_cache_path)
+        self._current_players: list[PlayerSummary] | None = None
 
     def _load_json_cache(self, path: Path) -> dict:
         if path.exists():
@@ -248,6 +250,12 @@ class NBADataService:
     def _save_scoring_cache(self) -> None:
         self._scoring_cache_path.write_text(json.dumps(self._scoring_cache, indent=2), encoding="utf-8")
 
+    def _save_current_players_cache(self, players: list[PlayerSummary]) -> None:
+        self._current_players_cache_path.write_text(
+            json.dumps([player.model_dump() for player in players], indent=2),
+            encoding="utf-8",
+        )
+
     def get_all_players(self) -> list[PlayerSummary]:
         if self._all_players is not None:
             return self._all_players
@@ -264,6 +272,39 @@ class NBADataService:
         except Exception:
             self._all_players = sorted(FALLBACK_PLAYERS, key=lambda player: player.name)
         return self._all_players
+
+    def get_current_players(self) -> list[PlayerSummary]:
+        if self._current_players is not None:
+            return self._current_players
+        if self._current_players_cache_path.exists():
+            try:
+                cached = json.loads(self._current_players_cache_path.read_text(encoding="utf-8"))
+                self._current_players = sorted(
+                    [PlayerSummary(id=int(player["id"]), name=str(player["name"])) for player in cached],
+                    key=lambda player: player.name,
+                )
+                return self._current_players
+            except Exception:
+                pass
+        try:
+            rows = self._team_scoring_players(0, "2025-26")
+            players = [
+                PlayerSummary(id=int(player["id"]), name=str(player["name"]))
+                for player in rows
+                if float(player.get("minutes", 0)) > 0
+            ]
+            self._current_players = sorted(players, key=lambda player: player.name)
+            self._save_current_players_cache(self._current_players)
+        except Exception:
+            current_ids = {player_id for player_id, seasons in MANUAL_PLAYER_SEASONS.items() if (1610612759, "2025-26") in seasons}
+            self._current_players = sorted(
+                [player for player in self.get_all_players() if player.id in current_ids],
+                key=lambda player: player.name,
+            )
+        return self._current_players
+
+    def is_current_player(self, player_id: int) -> bool:
+        return any(player.id == player_id for player in self.get_current_players())
 
     def find_player_by_id(self, player_id: int) -> PlayerSummary | None:
         return next((player for player in self.get_all_players() if player.id == player_id), None)
@@ -311,8 +352,14 @@ class NBADataService:
         players = [by_name[normalize_name(name)] for name in TOP_SCORER_FALLBACK_NAMES if normalize_name(name) in by_name]
         return players or FALLBACK_PLAYERS
 
-    def random_top_scorer(self) -> PlayerSummary:
-        return random.choice(self.get_top_scorers())
+    def random_top_scorer(self, current_only: bool = False) -> PlayerSummary:
+        top_scorers = self.get_top_scorers()
+        if current_only:
+            current_ids = {player.id for player in self.get_current_players()}
+            current_top_scorers = [player for player in top_scorers if player.id in current_ids]
+            if current_top_scorers:
+                return random.choice(current_top_scorers)
+        return random.choice(top_scorers)
 
     def find_player(self, value: str) -> PlayerSummary | None:
         needle = normalize_name(value)
@@ -484,8 +531,16 @@ class NBADataService:
             player_id = row.get("PLAYER_ID")
             name = row.get("PLAYER_NAME")
             points = row.get("PTS")
+            minutes = row.get("MIN")
             if pd.notna(player_id) and name and pd.notna(points):
-                rows.append({"id": int(player_id), "name": str(name), "points": float(points)})
+                rows.append(
+                    {
+                        "id": int(player_id),
+                        "name": str(name),
+                        "points": float(points),
+                        "minutes": float(minutes) if pd.notna(minutes) else 0.0,
+                    }
+                )
         self._scoring_cache[cache_key] = rows
         self._save_scoring_cache()
         return rows
@@ -527,16 +582,24 @@ class NBADataService:
                 candidates[candidate_id] = PlayerSummary(id=candidate_id, name=str(player["name"]))
         return list(candidates.values())
 
-    def random_scoring_teammate(self, player_id: int, used_player_ids: set[int], min_points: float = 7.0) -> PlayerSummary | None:
-        cached_scoring = self._cached_scoring_teammates(player_id, used_player_ids, min_points)
+    def _filter_current(self, players: list[PlayerSummary], current_only: bool) -> list[PlayerSummary]:
+        if not current_only:
+            return players
+        current_ids = {player.id for player in self.get_current_players()}
+        return [player for player in players if player.id in current_ids]
+
+    def random_scoring_teammate(
+        self, player_id: int, used_player_ids: set[int], min_points: float = 7.0, current_only: bool = False
+    ) -> PlayerSummary | None:
+        cached_scoring = self._filter_current(self._cached_scoring_teammates(player_id, used_player_ids, min_points), current_only)
         if cached_scoring:
             return random.choice(cached_scoring)
 
-        fallback = self._fallback_regular_teammates(player_id, used_player_ids)
+        fallback = self._filter_current(self._fallback_regular_teammates(player_id, used_player_ids), current_only)
         if fallback:
             return random.choice(fallback)
 
-        cached_regular = self._cached_regular_teammates(player_id, used_player_ids)
+        cached_regular = self._filter_current(self._cached_regular_teammates(player_id, used_player_ids), current_only)
         if cached_regular:
             return random.choice(cached_regular)
 
@@ -551,23 +614,25 @@ class NBADataService:
                     and int(player["id"]) not in used_player_ids
                     and float(player["points"]) > min_points
                 ]
+                candidates = self._filter_current(candidates, current_only)
                 if candidates:
                     return random.choice(candidates)
         except Exception:
             pass
 
-        fallback = self._fallback_regular_teammates(player_id, used_player_ids)
+        fallback = self._filter_current(self._fallback_regular_teammates(player_id, used_player_ids), current_only)
         return random.choice(fallback) if fallback else None
 
-    def debug_bot_answer(self, player_id: int, used_player_ids: set[int], samples: int = 8) -> dict[str, Any]:
+    def debug_bot_answer(self, player_id: int, used_player_ids: set[int], samples: int = 8, current_only: bool = False) -> dict[str, Any]:
         started = time.perf_counter()
-        cached_scoring = self._cached_scoring_teammates(player_id, used_player_ids, 7.0)
-        fallback = self._fallback_regular_teammates(player_id, used_player_ids)
-        cached_regular = self._cached_regular_teammates(player_id, used_player_ids)
+        cached_scoring = self._filter_current(self._cached_scoring_teammates(player_id, used_player_ids, 7.0), current_only)
+        fallback = self._filter_current(self._fallback_regular_teammates(player_id, used_player_ids), current_only)
+        cached_regular = self._filter_current(self._cached_regular_teammates(player_id, used_player_ids), current_only)
         live_attempt_needed = not cached_scoring and not fallback and not cached_regular
-        picks = [self.random_scoring_teammate(player_id, used_player_ids) for _ in range(max(1, min(samples, 25)))]
+        picks = [self.random_scoring_teammate(player_id, used_player_ids, current_only=current_only) for _ in range(max(1, min(samples, 25)))]
         return {
             "target": (self.find_player_by_id(player_id) or PlayerSummary(id=player_id, name=f"Player {player_id}")).model_dump(),
+            "currentOnly": current_only,
             "usedPlayerIds": sorted(used_player_ids),
             "candidateCounts": {
                 "cachedScoringOver7Ppg": len(cached_scoring),
