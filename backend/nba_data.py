@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import random
 import re
+import time
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
@@ -263,6 +265,16 @@ class NBADataService:
             self._all_players = sorted(FALLBACK_PLAYERS, key=lambda player: player.name)
         return self._all_players
 
+    def find_player_by_id(self, player_id: int) -> PlayerSummary | None:
+        return next((player for player in self.get_all_players() if player.id == player_id), None)
+
+    def resolve_player(self, value: str) -> PlayerSummary | None:
+        stripped = value.strip()
+        if stripped.isdigit():
+            player_id = int(stripped)
+            return self.find_player_by_id(player_id) or PlayerSummary(id=player_id, name=f"Player {player_id}")
+        return self.find_player(value)
+
     def get_top_scorers(self) -> list[PlayerSummary]:
         if self._top_scorers is not None:
             return self._top_scorers
@@ -337,29 +349,97 @@ class NBADataService:
     def _manual_player_seasons(self, player_id: int) -> set[tuple[int, str]]:
         return set(FALLBACK_PLAYER_SEASONS.get(player_id, set())) | set(MANUAL_PLAYER_SEASONS.get(player_id, set()))
 
+    def _fetch_live_player_seasons(self, player_id: int, timeout: int = 12) -> set[tuple[int, str]]:
+        from nba_api.stats.endpoints import playercareerstats
+
+        response = playercareerstats.PlayerCareerStats(player_id=player_id, timeout=timeout)
+        frame = response.get_data_frames()[0]
+        rows: set[tuple[int, str]] = set()
+        for _, row in frame.iterrows():
+            team_id = row.get("TEAM_ID")
+            season_id = row.get("SEASON_ID")
+            if pd.notna(team_id) and pd.notna(season_id) and int(team_id) > 0:
+                rows.add((int(team_id), str(season_id)))
+        return rows
+
     def _player_seasons(self, player_id: int) -> list[tuple[int, str]]:
         cache_key = str(player_id)
         manual = self._manual_player_seasons(player_id)
         if cache_key in self._season_cache:
             cached = {(int(team_id), str(season)) for team_id, season in self._season_cache[cache_key]}
             return sorted(cached | manual)
-        from nba_api.stats.endpoints import playercareerstats
-
         try:
-            response = playercareerstats.PlayerCareerStats(player_id=player_id, timeout=12)
-            frame = response.get_data_frames()[0]
-            rows: set[tuple[int, str]] = set()
-            for _, row in frame.iterrows():
-                team_id = row.get("TEAM_ID")
-                season_id = row.get("SEASON_ID")
-                if pd.notna(team_id) and pd.notna(season_id) and int(team_id) > 0:
-                    rows.add((int(team_id), str(season_id)))
+            rows = self._fetch_live_player_seasons(player_id)
             rows |= manual
             self._season_cache[cache_key] = [[team_id, season] for team_id, season in sorted(rows)]
             self._save_season_cache()
             return sorted(rows)
         except Exception:
             return sorted(manual)
+
+    def debug_player_seasons(self, player_id: int, refresh: bool = False) -> dict[str, Any]:
+        started = time.perf_counter()
+        cache_key = str(player_id)
+        player = self.find_player_by_id(player_id) or PlayerSummary(id=player_id, name=f"Player {player_id}")
+        cached = {(int(team_id), str(season)) for team_id, season in self._season_cache.get(cache_key, [])}
+        manual = self._manual_player_seasons(player_id)
+        live: set[tuple[int, str]] = set()
+        live_error = None
+        live_attempted = refresh or not cached
+
+        if live_attempted:
+            try:
+                live = self._fetch_live_player_seasons(player_id, timeout=15)
+                self._season_cache[cache_key] = [[team_id, season] for team_id, season in sorted(live | manual)]
+                self._save_season_cache()
+            except Exception as exc:
+                live_error = f"{type(exc).__name__}: {exc}"
+
+        sources: dict[tuple[int, str], set[str]] = {}
+        for source, rows in (("cache", cached), ("manual", manual), ("live", live)):
+            for row in rows:
+                sources.setdefault(row, set()).add(source)
+
+        merged = sorted(sources)
+        return {
+            "player": player.model_dump(),
+            "playerId": player_id,
+            "cacheHit": bool(cached),
+            "liveAttempted": live_attempted,
+            "liveError": live_error,
+            "counts": {
+                "cache": len(cached),
+                "manual": len(manual),
+                "live": len(live),
+                "merged": len(merged),
+            },
+            "seasons": [
+                {
+                    "season": season,
+                    "teamId": team_id,
+                    "key": f"{season}:{team_id}",
+                    "sources": sorted(sources[(team_id, season)]),
+                }
+                for team_id, season in merged
+            ],
+            "durationMs": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    def debug_teammate_check(self, first_player_id: int, second_player_id: int, refresh: bool = False) -> dict[str, Any]:
+        started = time.perf_counter()
+        first = self.debug_player_seasons(first_player_id, refresh)
+        second = self.debug_player_seasons(second_player_id, refresh)
+        first_keys = {row["key"] for row in first["seasons"]}
+        second_keys = {row["key"] for row in second["seasons"]}
+        shared = sorted(first_keys & second_keys)
+        return {
+            "valid": bool(shared),
+            "sharedSeasonTeams": shared,
+            "players": [first["player"], second["player"]],
+            "first": first,
+            "second": second,
+            "durationMs": round((time.perf_counter() - started) * 1000, 1),
+        }
 
     def are_regular_season_teammates(self, first_player_id: int, second_player_id: int) -> bool:
         try:
@@ -368,8 +448,8 @@ class NBADataService:
             return bool(first & second)
         except Exception:
             return bool(
-                FALLBACK_PLAYER_SEASONS.get(first_player_id, set())
-                & FALLBACK_PLAYER_SEASONS.get(second_player_id, set())
+                self._manual_player_seasons(first_player_id)
+                & self._manual_player_seasons(second_player_id)
             )
 
     def _team_roster(self, team_id: int, season: str) -> list[PlayerSummary]:
@@ -463,7 +543,7 @@ class NBADataService:
         try:
             seasons = self._player_seasons(player_id)
             random.shuffle(seasons)
-            for team_id, season in seasons[:1]:
+            for team_id, season in seasons[:4]:
                 candidates = [
                     PlayerSummary(id=int(player["id"]), name=str(player["name"]))
                     for player in self._team_scoring_players(team_id, season)
@@ -478,6 +558,31 @@ class NBADataService:
 
         fallback = self._fallback_regular_teammates(player_id, used_player_ids)
         return random.choice(fallback) if fallback else None
+
+    def debug_bot_answer(self, player_id: int, used_player_ids: set[int], samples: int = 8) -> dict[str, Any]:
+        started = time.perf_counter()
+        cached_scoring = self._cached_scoring_teammates(player_id, used_player_ids, 7.0)
+        fallback = self._fallback_regular_teammates(player_id, used_player_ids)
+        cached_regular = self._cached_regular_teammates(player_id, used_player_ids)
+        live_attempt_needed = not cached_scoring and not fallback and not cached_regular
+        picks = [self.random_scoring_teammate(player_id, used_player_ids) for _ in range(max(1, min(samples, 25)))]
+        return {
+            "target": (self.find_player_by_id(player_id) or PlayerSummary(id=player_id, name=f"Player {player_id}")).model_dump(),
+            "usedPlayerIds": sorted(used_player_ids),
+            "candidateCounts": {
+                "cachedScoringOver7Ppg": len(cached_scoring),
+                "manualFallback": len(fallback),
+                "cachedRegularOverlap": len(cached_regular),
+            },
+            "candidates": {
+                "cachedScoringOver7Ppg": [player.model_dump() for player in cached_scoring[:20]],
+                "manualFallback": [player.model_dump() for player in fallback[:20]],
+                "cachedRegularOverlap": [player.model_dump() for player in cached_regular[:20]],
+            },
+            "liveAttemptNeeded": live_attempt_needed,
+            "samplePicks": [pick.model_dump() if pick else None for pick in picks],
+            "durationMs": round((time.perf_counter() - started) * 1000, 1),
+        }
 
     def get_teammates(self, player_id: int) -> list[PlayerSummary]:
         cache_key = str(player_id)

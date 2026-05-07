@@ -183,6 +183,33 @@ def bot_answer(player_id: int, used: str = "") -> dict[str, Any]:
     return {"player": player.model_dump() if player else None}
 
 
+@app.get("/api/debug/player-seasons")
+def debug_player_seasons(q: str, refresh: bool = False) -> dict[str, Any]:
+    player = nba.resolve_player(q)
+    if not player:
+        return {"error": "unknown_player", "query": q}
+    return nba.debug_player_seasons(player.id, refresh)
+
+
+@app.get("/api/debug/teammate-check")
+def debug_teammate_check(player1: str, player2: str, refresh: bool = False) -> dict[str, Any]:
+    first = nba.resolve_player(player1)
+    second = nba.resolve_player(player2)
+    if not first or not second:
+        return {
+            "error": "unknown_player",
+            "player1": first.model_dump() if first else None,
+            "player2": second.model_dump() if second else None,
+        }
+    return nba.debug_teammate_check(first.id, second.id, refresh)
+
+
+@app.get("/api/debug/bot-answer/{player_id}")
+def debug_bot_answer(player_id: int, used: str = "", samples: int = 8) -> dict[str, Any]:
+    used_ids = {int(item) for item in used.split(",") if item.strip().isdigit()}
+    return nba.debug_bot_answer(player_id, used_ids, samples)
+
+
 @app.post("/api/validate")
 def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
     match = nba.find_player(request.guess)
