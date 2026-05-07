@@ -31,6 +31,38 @@ FALLBACK_PLAYERS = [
     PlayerSummary(id=203507, name="Giannis Antetokounmpo"),
     PlayerSummary(id=203999, name="Nikola Jokic"),
     PlayerSummary(id=1629029, name="Luka Doncic"),
+    PlayerSummary(id=2548, name="Dwyane Wade"),
+    PlayerSummary(id=202681, name="Kyrie Irving"),
+    PlayerSummary(id=203076, name="Anthony Davis"),
+    PlayerSummary(id=201566, name="Russell Westbrook"),
+    PlayerSummary(id=1626164, name="Devin Booker"),
+    PlayerSummary(id=202691, name="Klay Thompson"),
+    PlayerSummary(id=203110, name="Draymond Green"),
+    PlayerSummary(id=2738, name="Andre Iguodala"),
+    PlayerSummary(id=203954, name="Joel Embiid"),
+    PlayerSummary(id=937, name="Scottie Pippen"),
+    PlayerSummary(id=23, name="Dennis Rodman"),
+    PlayerSummary(id=2200, name="Pau Gasol"),
+    PlayerSummary(id=965, name="Derek Fisher"),
+    PlayerSummary(id=1938, name="Manu Ginobili"),
+    PlayerSummary(id=2225, name="Tony Parker"),
+    PlayerSummary(id=202695, name="Kawhi Leonard"),
+    PlayerSummary(id=1718, name="Paul Pierce"),
+    PlayerSummary(id=951, name="Ray Allen"),
+    PlayerSummary(id=200765, name="Rajon Rondo"),
+    PlayerSummary(id=1627750, name="Jamal Murray"),
+    PlayerSummary(id=203932, name="Aaron Gordon"),
+    PlayerSummary(id=1629008, name="Michael Porter Jr."),
+    PlayerSummary(id=1628973, name="Jalen Brunson"),
+    PlayerSummary(id=203081, name="Damian Lillard"),
+    PlayerSummary(id=201950, name="Jrue Holiday"),
+    PlayerSummary(id=203114, name="Khris Middleton"),
+    PlayerSummary(id=201933, name="Blake Griffin"),
+    PlayerSummary(id=201599, name="DeAndre Jordan"),
+    PlayerSummary(id=203482, name="Kelly Olynyk"),
+    PlayerSummary(id=1641705, name="Victor Wembanyama"),
+    PlayerSummary(id=77142, name="Magic Johnson"),
+    PlayerSummary(id=600015, name="Oscar Robertson"),
 ]
 
 TOP_SCORER_FALLBACK_NAMES = [
@@ -112,26 +144,30 @@ TOP_SCORER_FALLBACK_NAMES = [
 ]
 
 FALLBACK_TEAMMATES: dict[int, list[int]] = {
-    2544: [201142, 201939],
-    201142: [201939, 201935, 2544],
-    201939: [201142, 203507, 2544],
-    201935: [201142, 101108],
-    893: [],
-    977: [406],
-    406: [977, 708],
-    1495: [],
-    708: [406],
-    203999: [],
-    1629029: [],
-    203507: [201939],
-    101108: [201935],
-    76003: [],
+    2544: [2548, 202681, 203076, 406],
+    201142: [201939, 201935, 201566, 1626164, 101108, 202681],
+    201939: [201142, 202691, 203110, 2738, 101108],
+    201935: [201142, 101108, 201566, 203954],
+    893: [937, 23],
+    977: [406, 2200, 965],
+    406: [977, 2548, 2544, 708],
+    1495: [1938, 2225, 202695],
+    708: [1718, 951, 200765, 406],
+    203999: [1627750, 203932, 1629008],
+    1629029: [202681, 1628973],
+    203507: [203081, 201950, 203114],
+    101108: [201935, 1626164, 201933, 201939],
+    76003: [77142, 600015],
+    201933: [201599],
+    201599: [201933],
+    203482: [1641705],
+    1641705: [203482],
     56: [],
     1717: [],
 }
 
 FALLBACK_PLAYER_SEASONS: dict[int, set[tuple[int, str]]] = {
-    2544: {(1610612747, "2018-19"), (1610612744, "2024-25")},
+    2544: {(1610612747, "2018-19"), (1610612747, "2019-20"), (1610612747, "2024-25")},
     201142: {(1610612744, "2016-17"), (1610612756, "2023-24")},
     201939: {(1610612744, "2016-17"), (1610612744, "2024-25")},
     201935: {(1610612745, "2017-18"), (1610612751, "2021-22")},
@@ -140,6 +176,34 @@ FALLBACK_PLAYER_SEASONS: dict[int, set[tuple[int, str]]] = {
     406: {(1610612747, "2000-01"), (1610612738, "2010-11")},
     708: {(1610612738, "2010-11")},
     203507: {(1610612744, "2024-25")},
+}
+
+MANUAL_PLAYER_SEASONS: dict[int, set[tuple[int, str]]] = {
+    201933: {
+        (1610612746, "2009-10"),
+        (1610612746, "2010-11"),
+        (1610612746, "2011-12"),
+        (1610612746, "2012-13"),
+        (1610612746, "2013-14"),
+        (1610612746, "2014-15"),
+        (1610612746, "2015-16"),
+        (1610612746, "2016-17"),
+        (1610612746, "2017-18"),
+    },
+    201599: {
+        (1610612746, "2008-09"),
+        (1610612746, "2009-10"),
+        (1610612746, "2010-11"),
+        (1610612746, "2011-12"),
+        (1610612746, "2012-13"),
+        (1610612746, "2013-14"),
+        (1610612746, "2014-15"),
+        (1610612746, "2015-16"),
+        (1610612746, "2016-17"),
+        (1610612746, "2017-18"),
+    },
+    203482: {(1610612759, "2025-26")},
+    1641705: {(1610612759, "2025-26")},
 }
 
 
@@ -270,23 +334,32 @@ class NBADataService:
                 break
         return matches
 
+    def _manual_player_seasons(self, player_id: int) -> set[tuple[int, str]]:
+        return set(FALLBACK_PLAYER_SEASONS.get(player_id, set())) | set(MANUAL_PLAYER_SEASONS.get(player_id, set()))
+
     def _player_seasons(self, player_id: int) -> list[tuple[int, str]]:
         cache_key = str(player_id)
+        manual = self._manual_player_seasons(player_id)
         if cache_key in self._season_cache:
-            return [(int(team_id), str(season)) for team_id, season in self._season_cache[cache_key]]
+            cached = {(int(team_id), str(season)) for team_id, season in self._season_cache[cache_key]}
+            return sorted(cached | manual)
         from nba_api.stats.endpoints import playercareerstats
 
-        response = playercareerstats.PlayerCareerStats(player_id=player_id, timeout=20)
-        frame = response.get_data_frames()[0]
-        rows: list[tuple[int, str]] = []
-        for _, row in frame.iterrows():
-            team_id = row.get("TEAM_ID")
-            season_id = row.get("SEASON_ID")
-            if pd.notna(team_id) and pd.notna(season_id) and int(team_id) > 0:
-                rows.append((int(team_id), str(season_id)))
-        self._season_cache[cache_key] = [[team_id, season] for team_id, season in rows]
-        self._save_season_cache()
-        return rows
+        try:
+            response = playercareerstats.PlayerCareerStats(player_id=player_id, timeout=12)
+            frame = response.get_data_frames()[0]
+            rows: set[tuple[int, str]] = set()
+            for _, row in frame.iterrows():
+                team_id = row.get("TEAM_ID")
+                season_id = row.get("SEASON_ID")
+                if pd.notna(team_id) and pd.notna(season_id) and int(team_id) > 0:
+                    rows.add((int(team_id), str(season_id)))
+            rows |= manual
+            self._season_cache[cache_key] = [[team_id, season] for team_id, season in sorted(rows)]
+            self._save_season_cache()
+            return sorted(rows)
+        except Exception:
+            return sorted(manual)
 
     def are_regular_season_teammates(self, first_player_id: int, second_player_id: int) -> bool:
         try:
@@ -302,7 +375,7 @@ class NBADataService:
     def _team_roster(self, team_id: int, season: str) -> list[PlayerSummary]:
         from nba_api.stats.endpoints import commonteamroster
 
-        response = commonteamroster.CommonTeamRoster(team_id=team_id, season=season, timeout=20)
+        response = commonteamroster.CommonTeamRoster(team_id=team_id, season=season, timeout=5)
         frame = response.get_data_frames()[0]
         players = []
         for _, row in frame.iterrows():
@@ -323,7 +396,7 @@ class NBADataService:
             season=season,
             season_type_all_star="Regular Season",
             team_id_nullable=team_id,
-            timeout=20,
+            timeout=5,
         )
         frame = response.get_data_frames()[0]
         rows: list[dict[str, int | float | str]] = []
@@ -337,11 +410,60 @@ class NBADataService:
         self._save_scoring_cache()
         return rows
 
+    def _players_by_id(self) -> dict[int, PlayerSummary]:
+        return {player.id: player for player in self.get_all_players()}
+
+    def _fallback_regular_teammates(self, player_id: int, used_player_ids: set[int]) -> list[PlayerSummary]:
+        players_by_id = self._players_by_id()
+        return [
+            players_by_id[teammate_id]
+            for teammate_id in FALLBACK_TEAMMATES.get(player_id, [])
+            if teammate_id not in used_player_ids and teammate_id in players_by_id
+        ]
+
+    def _cached_regular_teammates(self, player_id: int, used_player_ids: set[int]) -> list[PlayerSummary]:
+        seasons = {tuple(row) for row in self._season_cache.get(str(player_id), [])}
+        if not seasons:
+            return []
+        players_by_id = self._players_by_id()
+        teammates: list[PlayerSummary] = []
+        for cached_id, cached_seasons in self._season_cache.items():
+            teammate_id = int(cached_id)
+            if teammate_id == player_id or teammate_id in used_player_ids or teammate_id not in players_by_id:
+                continue
+            if seasons & {tuple(row) for row in cached_seasons}:
+                teammates.append(players_by_id[teammate_id])
+        return teammates
+
+    def _cached_scoring_teammates(
+        self, player_id: int, used_player_ids: set[int], min_points: float
+    ) -> list[PlayerSummary]:
+        candidates: dict[int, PlayerSummary] = {}
+        for team_id, season in self._season_cache.get(str(player_id), []):
+            for player in self._scoring_cache.get(f"{team_id}:{season}", []):
+                candidate_id = int(player["id"])
+                if candidate_id == player_id or candidate_id in used_player_ids or float(player["points"]) <= min_points:
+                    continue
+                candidates[candidate_id] = PlayerSummary(id=candidate_id, name=str(player["name"]))
+        return list(candidates.values())
+
     def random_scoring_teammate(self, player_id: int, used_player_ids: set[int], min_points: float = 7.0) -> PlayerSummary | None:
+        cached_scoring = self._cached_scoring_teammates(player_id, used_player_ids, min_points)
+        if cached_scoring:
+            return random.choice(cached_scoring)
+
+        fallback = self._fallback_regular_teammates(player_id, used_player_ids)
+        if fallback:
+            return random.choice(fallback)
+
+        cached_regular = self._cached_regular_teammates(player_id, used_player_ids)
+        if cached_regular:
+            return random.choice(cached_regular)
+
         try:
             seasons = self._player_seasons(player_id)
             random.shuffle(seasons)
-            for team_id, season in seasons:
+            for team_id, season in seasons[:1]:
                 candidates = [
                     PlayerSummary(id=int(player["id"]), name=str(player["name"]))
                     for player in self._team_scoring_players(team_id, season)
@@ -354,12 +476,12 @@ class NBADataService:
         except Exception:
             pass
 
-        fallback = [player for player in self.get_teammates(player_id) if player.id not in used_player_ids]
+        fallback = self._fallback_regular_teammates(player_id, used_player_ids)
         return random.choice(fallback) if fallback else None
 
     def get_teammates(self, player_id: int) -> list[PlayerSummary]:
         cache_key = str(player_id)
-        players_by_id = {player.id: player for player in self.get_all_players()}
+        players_by_id = self._players_by_id()
         if cache_key in self._teammate_cache:
             return [
                 players_by_id[player_id]

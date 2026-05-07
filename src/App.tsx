@@ -309,7 +309,7 @@ function Game({
       if (payload.event === "repeat") {
         flashInvalid("No repeats in the chain.");
         if (stateRef.current.currentSeatId) {
-          markBubble(stateRef.current.currentSeatId, "Repeat", "wrong");
+          markBubble(stateRef.current.currentSeatId, payload.player?.name ?? "Duplicate", "wrong");
         }
         return;
       }
@@ -327,27 +327,18 @@ function Game({
     if (mode !== "ai" || state.finished) return;
     const botSeat = currentSeat?.botAccuracy ? currentSeat : null;
     if (!botSeat) return;
-    let resolvedPick: PlayerSummary | null = null;
-    let answerReady = false;
     const turn: TurnSnapshot = {
       seatId: botSeat.id,
       targetId: state.currentTarget.id,
       expiresAt: state.expiresAt
     };
     const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
-    if (shouldHit) {
-      fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds)
-        .then((pick) => {
-          resolvedPick = pick;
-          answerReady = true;
-        })
-        .catch(() => {
-          answerReady = true;
-        });
-    }
+    const answerPromise = shouldHit ? fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds).catch(() => null) : null;
     const timeout = window.setTimeout(async () => {
       if (!isSameTurn(turn)) return;
-      if (shouldHit && answerReady && resolvedPick) {
+      const resolvedPick = answerPromise ? await answerPromise : null;
+      if (!isSameTurn(turn)) return;
+      if (shouldHit && resolvedPick) {
         applyConfirmedGuess(resolvedPick, true, turn);
         return;
       }
@@ -358,7 +349,7 @@ function Game({
 
   useEffect(() => {
     if (mode !== "ai" || state.finished || secondsLeft > 0 || !currentSeat) return;
-    eliminateLocal(currentSeat.id, "time");
+    eliminateLocal(currentSeat.id, "time", undefined, "Time");
   }, [secondsLeft, mode, state.finished, currentSeat?.id]);
 
   useEffect(() => {
@@ -437,11 +428,12 @@ function Game({
     return nextState;
   }
 
-  function eliminateLocal(seatId: string, reason: string, turn?: TurnSnapshot) {
+  function eliminateLocal(seatId: string, reason: string, turn?: TurnSnapshot, fallbackText?: string) {
     if (turn && !isSameTurn(turn)) return;
     playSound("wrong");
-    if (!seatBubbles[seatId]) {
-      markBubble(seatId, reason === "time" ? "Time" : "Repeat", "wrong");
+    const bubbleText = reason === "time" ? "Time" : fallbackText;
+    if (bubbleText) {
+      markBubble(seatId, bubbleText, "wrong");
     }
     setState((previous) => {
       if (turn && (previous.currentSeatId !== turn.seatId || previous.currentTarget.id !== turn.targetId || previous.expiresAt !== turn.expiresAt)) {
@@ -479,7 +471,7 @@ function Game({
         return;
       }
       markBubble(seat.id, value, "wrong");
-      eliminateLocal(seat.id, result.reason ?? "wrong", turn);
+      eliminateLocal(seat.id, result.reason ?? "wrong", turn, value);
       setMessage(`${seat.username} missed the link.`);
       return;
     }

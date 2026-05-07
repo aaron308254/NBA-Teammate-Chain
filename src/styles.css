@@ -399,6 +399,11 @@ button:disabled {
   display: grid;
   justify-items: center;
   min-height: 4rem;
+  transition: transform 180ms ease-out;
+}
+
+.seat-row.is-turn .seat-avatar-wrap {
+  transform: translateY(0.35rem);
 }
 
 .seat-avatar {
@@ -463,6 +468,12 @@ button:disabled {
 .seat-row.is-turn .seat-avatar {
   filter: saturate(1.15) brightness(1.2);
   transform: scale(1.22);
+}
+
+.seat-row strong {
+  align-self: end;
+  justify-self: end;
+  margin-bottom: 0.05rem;
 }
 
 .bubble-track {
