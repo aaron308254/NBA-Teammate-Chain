@@ -35,6 +35,7 @@ FALLBACK_PLAYERS = [
     PlayerSummary(id=1629029, name="Luka Doncic"),
     PlayerSummary(id=2548, name="Dwyane Wade"),
     PlayerSummary(id=202681, name="Kyrie Irving"),
+    PlayerSummary(id=1630169, name="Tyrese Haliburton"),
     PlayerSummary(id=203076, name="Anthony Davis"),
     PlayerSummary(id=201566, name="Russell Westbrook"),
     PlayerSummary(id=1626164, name="Devin Booker"),
@@ -59,6 +60,7 @@ FALLBACK_PLAYERS = [
     PlayerSummary(id=203081, name="Damian Lillard"),
     PlayerSummary(id=201950, name="Jrue Holiday"),
     PlayerSummary(id=203114, name="Khris Middleton"),
+    PlayerSummary(id=1627832, name="Fred VanVleet"),
     PlayerSummary(id=201933, name="Blake Griffin"),
     PlayerSummary(id=201599, name="DeAndre Jordan"),
     PlayerSummary(id=203482, name="Kelly Olynyk"),
@@ -181,6 +183,10 @@ FALLBACK_PLAYER_SEASONS: dict[int, set[tuple[int, str]]] = {
 }
 
 MANUAL_PLAYER_SEASONS: dict[int, set[tuple[int, str]]] = {
+    1630169: {(1610612754, "2025-26")},
+    203081: {(1610612757, "2025-26")},
+    202681: {(1610612742, "2025-26")},
+    1627832: {(1610612745, "2025-26")},
     201933: {
         (1610612746, "2009-10"),
         (1610612746, "2010-11"),
@@ -256,6 +262,21 @@ class NBADataService:
             encoding="utf-8",
         )
 
+    def _manual_current_player_ids(self) -> set[int]:
+        return {
+            player_id
+            for player_id, seasons in MANUAL_PLAYER_SEASONS.items()
+            if any(season == "2025-26" for _, season in seasons)
+        }
+
+    def _with_manual_current_players(self, players: list[PlayerSummary]) -> list[PlayerSummary]:
+        by_id = {player.id: player for player in players}
+        all_players_by_id = self._players_by_id()
+        for player_id in self._manual_current_player_ids():
+            if player_id in all_players_by_id:
+                by_id[player_id] = all_players_by_id[player_id]
+        return sorted(by_id.values(), key=lambda player: player.name)
+
     def get_all_players(self) -> list[PlayerSummary]:
         if self._all_players is not None:
             return self._all_players
@@ -279,9 +300,8 @@ class NBADataService:
         if self._current_players_cache_path.exists():
             try:
                 cached = json.loads(self._current_players_cache_path.read_text(encoding="utf-8"))
-                self._current_players = sorted(
+                self._current_players = self._with_manual_current_players(
                     [PlayerSummary(id=int(player["id"]), name=str(player["name"])) for player in cached],
-                    key=lambda player: player.name,
                 )
                 return self._current_players
             except Exception:
@@ -293,10 +313,10 @@ class NBADataService:
                 for player in rows
                 if float(player.get("minutes", 0)) > 0
             ]
-            self._current_players = sorted(players, key=lambda player: player.name)
+            self._current_players = self._with_manual_current_players(players)
             self._save_current_players_cache(self._current_players)
         except Exception:
-            current_ids = {player_id for player_id, seasons in MANUAL_PLAYER_SEASONS.items() if (1610612759, "2025-26") in seasons}
+            current_ids = self._manual_current_player_ids()
             self._current_players = sorted(
                 [player for player in self.get_all_players() if player.id in current_ids],
                 key=lambda player: player.name,
