@@ -1,0 +1,602 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, FormEvent } from "react";
+import { Bot, Crown, LogIn, RadioTower, Search, ShieldX, Trophy, UserRound, Users } from "lucide-react";
+import {
+  bootstrap,
+  fetchTeammates,
+  loginWithGoogle,
+  randomStarter,
+  updateStats,
+  updateUsername,
+  validateGuess
+} from "./api";
+import type { AppUser, Leaderboard, PlayerSummary, RoomState, Seat } from "./types";
+
+const TURN_SECONDS = 15;
+const emptyLeaderboard: Leaderboard = { top: [], me: null };
+
+function normalize(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function makeSeat(username: string, botAccuracy?: number): Seat {
+  return {
+    id: crypto.randomUUID(),
+    username,
+    active: true,
+    correct: 0,
+    botAccuracy
+  };
+}
+
+function Home({
+  user,
+  leaderboard,
+  onQueue,
+  onAi,
+  onLogin,
+  onUsername
+}: {
+  user: AppUser | null;
+  leaderboard: Leaderboard;
+  onQueue: () => void;
+  onAi: () => void;
+  onLogin: (credential: string) => void;
+  onUsername: (value: string) => void;
+}) {
+  const [username, setUsername] = useState(user?.username ?? "");
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+  useEffect(() => {
+    if (!clientId || user || !googleButtonRef.current) return;
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      const google = (window as unknown as { google?: any }).google;
+      if (!googleButtonRef.current || !google?.accounts?.id) return;
+      google.accounts.id.initialize({
+        client_id: clientId,
+        callback: (response: { credential: string }) => onLogin(response.credential)
+      });
+      google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: "filled_black",
+        size: "large",
+        shape: "pill"
+      });
+    };
+    document.body.appendChild(script);
+    return () => {
+      script.remove();
+    };
+  }, [clientId, onLogin, user]);
+
+  return (
+    <main className="home-shell">
+      <div className="court-aurora" />
+      <header className="topbar">
+        <div className="brand-lockup">
+          <span className="brand-mark">TC</span>
+          <span>Teammate Chain</span>
+        </div>
+        <div className="auth-panel">
+          {user ? (
+            <>
+              <div className="avatar">{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <UserRound size={18} />}</div>
+              <input
+                aria-label="Username"
+                value={username}
+                maxLength={24}
+                onChange={(event) => setUsername(event.target.value)}
+                onBlur={() => username.trim() && username !== user.username && onUsername(username)}
+              />
+              <span className="wins-pill">{user.wins} wins</span>
+            </>
+          ) : clientId ? (
+            <div ref={googleButtonRef} />
+          ) : (
+            <button className="ghost-button" type="button" disabled>
+              <LogIn size={17} />
+              Add Google client ID
+            </button>
+          )}
+        </div>
+      </header>
+
+      <section className="home-grid">
+        <div className="hero-copy">
+          <p className="eyebrow">NBA history, one locker room at a time</p>
+          <h1>Build the longest teammate chain before the clock cuts you.</h1>
+          <p>
+            Four players rotate through a live NBA teammate link. Name a valid teammate in 15 seconds, avoid repeats,
+            and stay alive until the last seat.
+          </p>
+          <div className="action-row">
+            <button className="primary-action" type="button" onClick={onQueue}>
+              <Users size={20} />
+              Queue against other players
+            </button>
+            <button className="secondary-action" type="button" onClick={onAi}>
+              <Bot size={20} />
+              Play against AI
+            </button>
+          </div>
+        </div>
+
+        <LeaderboardPanel leaderboard={leaderboard} user={user} />
+      </section>
+    </main>
+  );
+}
+
+function LeaderboardPanel({ leaderboard, user }: { leaderboard: Leaderboard; user: AppUser | null }) {
+  return (
+    <aside className="leaderboard">
+      <div className="panel-title">
+        <Trophy size={20} />
+        <h2>Leaderboard</h2>
+      </div>
+      <div className="leaderboard-list">
+        {leaderboard.top.length ? (
+          leaderboard.top.map((entry, index) => (
+            <div className="leader-row" key={entry.id}>
+              <span className="rank">{entry.rank ?? index + 1}</span>
+              <span className="leader-name">{entry.username}</span>
+              <span className="leader-wins">{entry.wins}</span>
+            </div>
+          ))
+        ) : (
+          <div className="empty-board">No saved wins yet.</div>
+        )}
+      </div>
+      {leaderboard.me ? (
+        <div className="my-rank">
+          <span>#{leaderboard.me.rank}</span>
+          <strong>{leaderboard.me.username}</strong>
+          <span>{leaderboard.me.wins} wins</span>
+        </div>
+      ) : user ? (
+        <div className="my-rank">
+          <span>Stats</span>
+          <strong>{user.username}</strong>
+          <span>{user.winPercentage}% win rate</span>
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
+function QueueScreen({
+  user,
+  onCancel,
+  onStarted
+}: {
+  user: AppUser | null;
+  onCancel: () => void;
+  onStarted: (state: RoomState, socket: WebSocket) => void;
+}) {
+  const [queued, setQueued] = useState(1);
+  const [needed, setNeeded] = useState(4);
+  const handedOffRef = useRef(false);
+
+  useEffect(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const username = encodeURIComponent(user?.username ?? "Player");
+    const userId = encodeURIComponent(user?.id ?? "");
+    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/queue?username=${username}&userId=${userId}`);
+    socket.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as RoomState & { queued?: number; needed?: number };
+      if (payload.event === "queued") {
+        setQueued(payload.queued ?? 1);
+        setNeeded(payload.needed ?? 4);
+      }
+      if (payload.currentTarget) {
+        handedOffRef.current = true;
+        onStarted(payload, socket);
+      }
+    };
+    return () => {
+      if (!handedOffRef.current) socket.close();
+    };
+  }, [onStarted, user?.id, user?.username]);
+
+  return (
+    <main className="queue-screen">
+      <div className="queue-orbit">
+        <RadioTower size={34} />
+        <h1>Finding four players</h1>
+        <p>
+          {queued} of {needed} seats filled
+        </p>
+        <div
+          className="queue-meter"
+          style={{ "--queue": `${Math.min(100, (queued / needed) * 100)}%` } as CSSProperties & Record<"--queue", string>}
+        />
+        <button className="ghost-button" type="button" onClick={onCancel}>
+          Leave queue
+        </button>
+      </div>
+    </main>
+  );
+}
+
+function Game({
+  initialState,
+  allPlayers,
+  user,
+  mode,
+  onlineSocket,
+  onExit,
+  onStats
+}: {
+  initialState: RoomState;
+  allPlayers: PlayerSummary[];
+  user: AppUser | null;
+  mode: "ai" | "online";
+  onlineSocket: WebSocket | null;
+  onExit: () => void;
+  onStats: (user: AppUser, leaderboard: Leaderboard) => void;
+}) {
+  const [state, setState] = useState<RoomState>(initialState);
+  const [guess, setGuess] = useState("");
+  const [invalid, setInvalid] = useState(false);
+  const [message, setMessage] = useState("");
+  const [now, setNow] = useState(Date.now() / 1000);
+  const [humanCorrect, setHumanCorrect] = useState(0);
+  const socketRef = useRef<WebSocket | null>(null);
+  const submittedStatsRef = useRef(false);
+
+  const youSeatId = state.youSeatId ?? state.seats.find((seat) => !seat.botAccuracy)?.id ?? state.seats[0]?.id;
+  const currentSeat = state.seats.find((seat) => seat.id === state.currentSeatId);
+  const isYourTurn = currentSeat?.id === youSeatId && !state.finished;
+  const secondsLeft = Math.max(0, Math.ceil(state.expiresAt - now));
+
+  const suggestions = useMemo(() => {
+    const needle = normalize(guess);
+    if (needle.length < 2) return [];
+    return allPlayers
+      .filter((player) => {
+        const parts = player.name.split(" ");
+        const first = normalize(parts[0] ?? "");
+        const last = normalize(parts[parts.length - 1] ?? "");
+        const full = normalize(player.name);
+        return first.startsWith(needle) || last.startsWith(needle) || full.includes(needle);
+      })
+      .slice(0, 7);
+  }, [allPlayers, guess]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now() / 1000), 200);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "online" || !onlineSocket) return;
+    const socket = onlineSocket;
+    socketRef.current = onlineSocket;
+    socket.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as RoomState & { player?: PlayerSummary };
+      if (payload.event === "repeat") {
+        flashInvalid("No repeats in the chain.");
+        return;
+      }
+      if (payload.currentTarget) {
+        setState(payload);
+        setGuess("");
+      }
+    };
+    return () => socket.close();
+  }, [mode, onlineSocket]);
+
+  useEffect(() => {
+    if (mode !== "ai" || state.finished) return;
+    const botSeat = currentSeat?.botAccuracy ? currentSeat : null;
+    if (!botSeat) return;
+    const timeout = window.setTimeout(async () => {
+      const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
+      if (shouldHit) {
+        const teammates = await fetchTeammates(state.currentTarget.id, state.usedPlayerIds);
+        const pick = teammates[Math.floor(Math.random() * teammates.length)];
+        if (pick) {
+          await applyLocalGuess(pick.name, true);
+          return;
+        }
+      }
+      await applyLocalGuess("Wrong Answer", true);
+    }, 900 + Math.random() * 1800);
+    return () => window.clearTimeout(timeout);
+  }, [currentSeat?.id, mode, state.currentTarget.id, state.finished]);
+
+  useEffect(() => {
+    if (mode !== "ai" || state.finished || secondsLeft > 0 || !currentSeat) return;
+    eliminateLocal(currentSeat.id, "time");
+  }, [secondsLeft, mode, state.finished, currentSeat?.id]);
+
+  useEffect(() => {
+    if (!state.finished || submittedStatsRef.current || !user) return;
+    const won = state.winnerSeatId === youSeatId;
+    submittedStatsRef.current = true;
+    updateStats(user.id, won, humanCorrect).then((payload) => onStats(payload.user, payload.leaderboard));
+  }, [humanCorrect, onStats, state.finished, state.winnerSeatId, user, youSeatId]);
+
+  function flashInvalid(nextMessage: string) {
+    setInvalid(true);
+    setMessage(nextMessage);
+    window.setTimeout(() => setInvalid(false), 650);
+  }
+
+  function nextActiveIndex(seats: Seat[], currentIndex: number) {
+    for (let offset = 1; offset <= seats.length; offset += 1) {
+      const index = (currentIndex + offset) % seats.length;
+      if (seats[index].active) return index;
+    }
+    return currentIndex;
+  }
+
+  function updateTurn(nextState: RoomState, seats: Seat[], fromSeatId: string) {
+    const active = seats.filter((seat) => seat.active);
+    if (active.length <= 1) {
+      nextState.finished = true;
+      nextState.winnerSeatId = active[0]?.id ?? null;
+      nextState.currentSeatId = null;
+      nextState.expiresAt = Date.now() / 1000;
+      return nextState;
+    }
+    const currentIndex = seats.findIndex((seat) => seat.id === fromSeatId);
+    const nextIndex = nextActiveIndex(seats, currentIndex);
+    nextState.currentSeatId = seats[nextIndex].id;
+    nextState.expiresAt = Date.now() / 1000 + TURN_SECONDS;
+    return nextState;
+  }
+
+  function eliminateLocal(seatId: string, reason: string) {
+    setState((previous) => {
+      const seats = previous.seats.map((seat) =>
+        seat.id === seatId ? { ...seat, active: false, eliminated_reason: reason } : seat
+      );
+      return updateTurn({ ...previous, seats }, seats, seatId);
+    });
+    setGuess("");
+  }
+
+  async function applyLocalGuess(value: string, fromBot = false) {
+    const seat = currentSeat;
+    if (!seat) return;
+    const localMatch = allPlayers.find((player) => normalize(player.name) === normalize(value));
+    if (localMatch && state.usedPlayerIds.includes(localMatch.id)) {
+      if (!fromBot) flashInvalid("That player is already in the chain.");
+      return;
+    }
+    const result = await validateGuess(state.currentTarget.id, value, state.usedPlayerIds);
+    if (!result.valid || !result.player) {
+      if (result.reason === "repeat") {
+        if (!fromBot) flashInvalid("No repeats in the chain.");
+        return;
+      }
+      eliminateLocal(seat.id, result.reason ?? "wrong");
+      setMessage(`${seat.username} missed the link.`);
+      return;
+    }
+    const player = result.player;
+    setState((previous) => {
+      const seats = previous.seats.map((item) => (item.id === seat.id ? { ...item, correct: item.correct + 1 } : item));
+      const nextState: RoomState = {
+        ...previous,
+        seats,
+        chain: [...previous.chain, previous.currentTarget],
+        currentTarget: player,
+        usedPlayerIds: [...previous.usedPlayerIds, player.id]
+      };
+      return updateTurn(nextState, seats, seat.id);
+    });
+    if (!fromBot && seat.id === youSeatId) {
+      setHumanCorrect((count) => count + 1);
+    }
+    setGuess("");
+    setMessage(`${player.name} is live.`);
+  }
+
+  async function submitGuess(event: FormEvent) {
+    event.preventDefault();
+    const value = guess.trim();
+    if (!value || !isYourTurn) return;
+    if (mode === "online" && socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ event: "guess", guess: value }));
+      return;
+    }
+    await applyLocalGuess(value);
+  }
+
+  const winner = state.seats.find((seat) => seat.id === state.winnerSeatId);
+
+  return (
+    <main className="game-shell">
+      <section className="score-rail">
+        <div className="rail-title">
+          <Crown size={18} />
+          Seats
+        </div>
+        {state.seats.map((seat) => (
+          <div className={`seat-row ${seat.active ? "" : "is-out"} ${seat.id === state.currentSeatId ? "is-turn" : ""}`} key={seat.id}>
+            <span>{seat.username}</span>
+            <strong>{seat.correct}</strong>
+          </div>
+        ))}
+      </section>
+
+      <section className="play-area">
+        <div className="timer-stack">
+          <div className={`timer ${secondsLeft <= 5 ? "danger" : ""}`}>{secondsLeft}</div>
+          <p>{currentSeat ? `${currentSeat.username}'s turn` : "Game complete"}</p>
+        </div>
+
+        <div className="target-player">
+          <span>Name a teammate of</span>
+          <h1>{state.currentTarget.name}</h1>
+        </div>
+
+        {state.finished ? (
+          <div className="winner-panel">
+            <Trophy size={34} />
+            <h2>{winner?.username ?? "Nobody"} wins</h2>
+            <button className="primary-action" type="button" onClick={onExit}>
+              Back home
+            </button>
+          </div>
+        ) : (
+          <form className="guess-form" onSubmit={submitGuess}>
+            <div className={`input-wrap ${invalid ? "invalid" : ""}`}>
+              <Search size={19} />
+              <input
+                value={guess}
+                disabled={!isYourTurn}
+                onChange={(event) => setGuess(event.target.value)}
+                placeholder={isYourTurn ? "Enter a teammate" : "Waiting for your turn"}
+                autoComplete="off"
+              />
+            </div>
+            {suggestions.length > 0 && isYourTurn ? (
+              <div className="suggestions">
+                {suggestions.map((player) => (
+                  <button type="button" key={player.id} onClick={() => setGuess(player.name)}>
+                    {player.name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <button className="submit-button" disabled={!isYourTurn} type="submit">
+              Lock answer
+            </button>
+          </form>
+        )}
+
+        <p className="table-message">{message}</p>
+
+        <div className="chain-strip">
+          {state.chain.map((player, index) => (
+            <div className="chain-card" key={`${player.id}-${index}`}>
+              <span>{index + 1}</span>
+              <strong>{player.name}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rules-rail">
+        <ShieldX size={22} />
+        <h2>Elimination Rules</h2>
+        <p>Wrong player, expired clock, and repeated chain names keep the turn moving.</p>
+      </section>
+    </main>
+  );
+}
+
+export default function App() {
+  const [view, setView] = useState<"home" | "queue" | "game">("home");
+  const [allPlayers, setAllPlayers] = useState<PlayerSummary[]>([]);
+  const [leaderboard, setLeaderboard] = useState<Leaderboard>(emptyLeaderboard);
+  const [user, setUser] = useState<AppUser | null>(() => {
+    const raw = localStorage.getItem("teammate-chain-user");
+    return raw ? (JSON.parse(raw) as AppUser) : null;
+  });
+  const [initialState, setInitialState] = useState<RoomState | null>(null);
+  const [mode, setMode] = useState<"ai" | "online">("ai");
+  const [onlineSocket, setOnlineSocket] = useState<WebSocket | null>(null);
+
+  useEffect(() => {
+    bootstrap(user?.id).then((payload) => {
+      setAllPlayers(payload.allPlayers);
+      setLeaderboard(payload.leaderboard);
+    });
+  }, [user?.id]);
+
+  function persistUser(nextUser: AppUser) {
+    setUser(nextUser);
+    localStorage.setItem("teammate-chain-user", JSON.stringify(nextUser));
+  }
+
+  async function startAiGame() {
+    const starter = await randomStarter();
+    onlineSocket?.close();
+    setOnlineSocket(null);
+    const seats = [
+      makeSeat(user?.username ?? "You"),
+      makeSeat("Scout 40", 0.4),
+      makeSeat("Rotation 75", 0.75),
+      makeSeat("Archivist 90", 0.9)
+    ].sort(() => Math.random() - 0.5);
+    setMode("ai");
+    setInitialState({
+      event: "state",
+      seats,
+      currentSeatId: seats[Math.floor(Math.random() * seats.length)].id,
+      currentTarget: starter,
+      chain: [],
+      usedPlayerIds: [starter.id],
+      expiresAt: Date.now() / 1000 + TURN_SECONDS,
+      finished: false,
+      youSeatId: seats.find((seat) => !seat.botAccuracy)?.id
+    });
+    setView("game");
+  }
+
+  async function handleGoogleLogin(credential: string) {
+    const payload = await loginWithGoogle(credential);
+    if (payload.user) persistUser(payload.user);
+  }
+
+  async function handleUsername(value: string) {
+    if (!user) return;
+    const payload = await updateUsername(user.id, value);
+    if (payload.user) persistUser(payload.user);
+  }
+
+  if (view === "queue") {
+    return (
+      <QueueScreen
+        user={user}
+        onCancel={() => setView("home")}
+        onStarted={(state, socket) => {
+          setMode("online");
+          setInitialState(state);
+          setOnlineSocket(socket);
+          setView("game");
+        }}
+      />
+    );
+  }
+
+  if (view === "game" && initialState) {
+    return (
+      <Game
+        initialState={initialState}
+        allPlayers={allPlayers}
+        user={user}
+        mode={mode}
+        onlineSocket={onlineSocket}
+        onExit={() => {
+          onlineSocket?.close();
+          setOnlineSocket(null);
+          setView("home");
+        }}
+        onStats={(nextUser, nextLeaderboard) => {
+          persistUser(nextUser);
+          setLeaderboard(nextLeaderboard);
+        }}
+      />
+    );
+  }
+
+  return (
+    <Home
+      user={user}
+      leaderboard={leaderboard}
+      onQueue={() => setView("queue")}
+      onAi={startAiGame}
+      onLogin={handleGoogleLogin}
+      onUsername={handleUsername}
+    />
+  );
+}
