@@ -3,7 +3,7 @@ import type { CSSProperties, FormEvent } from "react";
 import { Bot, Crown, LogIn, RadioTower, Search, ShieldX, Trophy, UserRound, Users } from "lucide-react";
 import {
   bootstrap,
-  fetchTeammates,
+  fetchBotAnswer,
   loginWithGoogle,
   randomStarter,
   updateStats,
@@ -319,16 +319,15 @@ function Game({
     const timeout = window.setTimeout(async () => {
       const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
       if (shouldHit) {
-        const teammates = await fetchTeammates(state.currentTarget.id, state.usedPlayerIds);
+        const pick = await fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds);
         if (!isSameTurn(turn)) return;
-        const pick = teammates[Math.floor(Math.random() * teammates.length)];
         if (pick) {
           await applyLocalGuess(pick.name, true, turn);
           return;
         }
       }
-      await applyLocalGuess("Wrong Answer", true, turn);
-    }, 900 + Math.random() * 1800);
+      await applyLocalGuess("Aaron James", true, turn);
+    }, 2000 + Math.random() * 3000);
     return () => window.clearTimeout(timeout);
   }, [currentSeat?.id, mode, state.currentTarget.id, state.expiresAt, state.finished]);
 
@@ -464,6 +463,10 @@ function Game({
 
   async function submitGuess(event: FormEvent) {
     event.preventDefault();
+    await submitCurrentGuess();
+  }
+
+  async function submitCurrentGuess() {
     const value = guess.trim();
     if (!value || !isYourTurn || !currentSeat) return;
     setShowSuggestions(false);
@@ -546,7 +549,7 @@ function Game({
                 ))}
               </div>
             ) : null}
-            <button className="submit-button" disabled={!isYourTurn} type="submit">
+            <button className="submit-button" disabled={!isYourTurn} type="button" onClick={() => void submitCurrentGuess()}>
               Lock answer
             </button>
           </form>

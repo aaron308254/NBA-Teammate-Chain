@@ -176,6 +176,13 @@ async def teammates(player_id: int, used: str = "") -> dict[str, Any]:
     return {"players": [player.model_dump() for player in players]}
 
 
+@app.get("/api/bot-answer/{player_id}")
+async def bot_answer(player_id: int, used: str = "") -> dict[str, Any]:
+    used_ids = {int(item) for item in used.split(",") if item.strip().isdigit()}
+    player = nba.random_scoring_teammate(player_id, used_ids)
+    return {"player": player.model_dump() if player else None}
+
+
 @app.post("/api/validate")
 async def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
     match = nba.find_player(request.guess)

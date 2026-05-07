@@ -160,8 +160,10 @@ class NBADataService:
         self._top_scorers: list[PlayerSummary] | None = None
         self._teammate_cache_path = self.cache_dir / "teammates.json"
         self._season_cache_path = self.cache_dir / "player_seasons.json"
+        self._scoring_cache_path = self.cache_dir / "team_scoring.json"
         self._teammate_cache: dict[str, list[int]] = self._load_teammate_cache()
         self._season_cache: dict[str, list[list[int | str]]] = self._load_json_cache(self._season_cache_path)
+        self._scoring_cache: dict[str, list[dict[str, int | float | str]]] = self._load_json_cache(self._scoring_cache_path)
 
     def _load_json_cache(self, path: Path) -> dict:
         if path.exists():
@@ -176,6 +178,9 @@ class NBADataService:
 
     def _save_season_cache(self) -> None:
         self._season_cache_path.write_text(json.dumps(self._season_cache, indent=2), encoding="utf-8")
+
+    def _save_scoring_cache(self) -> None:
+        self._scoring_cache_path.write_text(json.dumps(self._scoring_cache, indent=2), encoding="utf-8")
 
     def get_all_players(self) -> list[PlayerSummary]:
         if self._all_players is not None:
@@ -306,6 +311,51 @@ class NBADataService:
             if pd.notna(player_id) and name:
                 players.append(PlayerSummary(id=int(player_id), name=str(name)))
         return players
+
+    def _team_scoring_players(self, team_id: int, season: str) -> list[dict[str, int | float | str]]:
+        cache_key = f"{team_id}:{season}"
+        if cache_key in self._scoring_cache:
+            return self._scoring_cache[cache_key]
+        from nba_api.stats.endpoints import leaguedashplayerstats
+
+        response = leaguedashplayerstats.LeagueDashPlayerStats(
+            per_mode_detailed="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+            team_id_nullable=team_id,
+            timeout=20,
+        )
+        frame = response.get_data_frames()[0]
+        rows: list[dict[str, int | float | str]] = []
+        for _, row in frame.iterrows():
+            player_id = row.get("PLAYER_ID")
+            name = row.get("PLAYER_NAME")
+            points = row.get("PTS")
+            if pd.notna(player_id) and name and pd.notna(points):
+                rows.append({"id": int(player_id), "name": str(name), "points": float(points)})
+        self._scoring_cache[cache_key] = rows
+        self._save_scoring_cache()
+        return rows
+
+    def random_scoring_teammate(self, player_id: int, used_player_ids: set[int], min_points: float = 7.0) -> PlayerSummary | None:
+        try:
+            seasons = self._player_seasons(player_id)
+            random.shuffle(seasons)
+            for team_id, season in seasons:
+                candidates = [
+                    PlayerSummary(id=int(player["id"]), name=str(player["name"]))
+                    for player in self._team_scoring_players(team_id, season)
+                    if int(player["id"]) != player_id
+                    and int(player["id"]) not in used_player_ids
+                    and float(player["points"]) > min_points
+                ]
+                if candidates:
+                    return random.choice(candidates)
+        except Exception:
+            pass
+
+        fallback = [player for player in self.get_teammates(player_id) if player.id not in used_player_ids]
+        return random.choice(fallback) if fallback else None
 
     def get_teammates(self, player_id: int) -> list[PlayerSummary]:
         cache_key = str(player_id)

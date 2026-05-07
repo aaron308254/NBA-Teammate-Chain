@@ -39,6 +39,12 @@ export async function fetchTeammates(playerId: number, usedIds: number[]): Promi
   return payload.players;
 }
 
+export async function fetchBotAnswer(playerId: number, usedIds: number[]): Promise<PlayerSummary | null> {
+  const used = usedIds.join(",");
+  const payload = await request<{ player: PlayerSummary | null }>(`/api/bot-answer/${playerId}?used=${used}`);
+  return payload.player;
+}
+
 export async function updateStats(userId: string, won: boolean, correctAnswers: number) {
   return request<{ user: AppUser; leaderboard: Leaderboard }>("/api/stats", {
     method: "POST",
