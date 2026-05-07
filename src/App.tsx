@@ -13,6 +13,8 @@ import {
 import type { AppUser, Leaderboard, PlayerSummary, RoomState, Seat } from "./types";
 
 const TURN_SECONDS = 15;
+const BOT_OPENING_CORRECT_ANSWERS = 4;
+const BOT_OPENING_ACCURACY = 0.98;
 const emptyLeaderboard: Leaderboard = { top: [], me: null };
 type SoundName = "tick" | "correct" | "wrong" | "win";
 type TurnSnapshot = {
@@ -379,7 +381,8 @@ function Game({
       targetId: state.currentTarget.id,
       expiresAt: state.expiresAt
     };
-    const shouldHit = Math.random() < (botSeat.botAccuracy ?? 0);
+    const answerChance = botAnswerChance(botSeat);
+    const shouldHit = Math.random() < answerChance;
     const answerPromise = shouldHit ? fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds, isCurrentPool).catch(() => null) : null;
     const timeout = window.setTimeout(async () => {
       if (!isSameTurn(turn)) return;
@@ -456,6 +459,13 @@ function Game({
     const candidates = playablePlayers.filter((player) => !usedIds.has(player.id));
     const pool = candidates.length ? candidates : playablePlayers;
     return pool[Math.floor(Math.random() * pool.length)]?.name ?? "Michael Jordan";
+  }
+
+  function botAnswerChance(seat: Seat) {
+    if (seat.correct < BOT_OPENING_CORRECT_ANSWERS) {
+      return Math.max(seat.botAccuracy ?? 0, BOT_OPENING_ACCURACY);
+    }
+    return seat.botAccuracy ?? 0;
   }
 
   function nextActiveIndex(seats: Seat[], currentIndex: number) {
@@ -762,9 +772,9 @@ export default function App() {
     setOnlineSocket(null);
     const seats = [
       makeSeat(user?.username ?? "You"),
-      makeSeat("Scout 40", 0.4),
-      makeSeat("Rotation 75", 0.75),
-      makeSeat("Archivist 90", 0.9)
+      makeSeat("Scout 82", 0.82),
+      makeSeat("Rotation 90", 0.9),
+      makeSeat("Archivist 97", 0.97)
     ].sort(() => Math.random() - 0.5);
     setMode("ai");
     setGamePool(nextGamePool);
