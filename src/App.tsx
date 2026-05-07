@@ -342,7 +342,7 @@ function Game({
         applyConfirmedGuess(resolvedPick, true, turn);
         return;
       }
-      await applyLocalGuess("Aaron James", true, turn);
+      await applyLocalGuess(randomBotMissGuess(), true, turn);
     }, 2000 + Math.random() * 3000);
     return () => window.clearTimeout(timeout);
   }, [currentSeat?.id, mode, state.currentTarget.id, state.expiresAt, state.finished]);
@@ -402,6 +402,13 @@ function Game({
         return next;
       });
     }, 3000);
+  }
+
+  function randomBotMissGuess() {
+    const usedIds = new Set(stateRef.current.usedPlayerIds);
+    const candidates = allPlayers.filter((player) => !usedIds.has(player.id));
+    const pool = candidates.length ? candidates : allPlayers;
+    return pool[Math.floor(Math.random() * pool.length)]?.name ?? "Michael Jordan";
   }
 
   function nextActiveIndex(seats: Seat[], currentIndex: number) {

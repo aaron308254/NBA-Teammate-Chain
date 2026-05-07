@@ -362,16 +362,20 @@ button:disabled {
 }
 
 .seat-row {
+  position: relative;
   display: grid;
   grid-template-columns: 4.8rem minmax(0, 1fr) 2rem;
   align-items: start;
   gap: 0.7rem;
   min-height: 5.25rem;
+  overflow: hidden;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: oklch(92% 0.02 85 / 0.075);
   padding: 0.8rem;
   transition:
     opacity 180ms ease-out,
+    border-color 180ms ease-out,
     background-color 180ms ease-out;
 }
 
@@ -535,9 +539,40 @@ button:disabled {
 }
 
 .seat-row.is-out {
-  color: oklch(78% 0.02 80 / 0.55);
-  text-decoration: line-through;
-  opacity: 0.58;
+  border-color: oklch(62% 0.2 28 / 0.52);
+  background: oklch(34% 0.11 28 / 0.54);
+  color: oklch(89% 0.035 38 / 0.72);
+  opacity: 0.76;
+}
+
+.seat-row.is-out::before,
+.seat-row.is-out::after {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  top: 50%;
+  z-index: 3;
+  height: 0.14rem;
+  border-radius: 999px;
+  background: oklch(70% 0.22 29 / 0.9);
+  box-shadow: 0 0 18px oklch(62% 0.22 29 / 0.28);
+  content: "";
+  pointer-events: none;
+}
+
+.seat-row.is-out::before {
+  transform: rotate(16deg);
+}
+
+.seat-row.is-out::after {
+  transform: rotate(-16deg);
+}
+
+.seat-row.is-out .seat-avatar,
+.seat-row.is-out .seat-name,
+.seat-row.is-out strong {
+  filter: grayscale(0.35);
+  opacity: 0.72;
 }
 
 .rules-rail {
