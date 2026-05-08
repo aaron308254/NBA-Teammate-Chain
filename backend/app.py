@@ -39,6 +39,11 @@ app.add_middleware(
 nba = NBADataService(APP_DIR / "cache")
 
 
+@app.on_event("startup")
+async def warm_nba_cache_on_startup() -> None:
+    asyncio.create_task(asyncio.to_thread(nba.warm_bot_cache))
+
+
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -214,6 +219,11 @@ def debug_teammate_check(player1: str, player2: str, refresh: bool = False) -> d
 def debug_bot_answer(player_id: int, used: str = "", samples: int = 8, currentOnly: bool = False) -> dict[str, Any]:
     used_ids = {int(item) for item in used.split(",") if item.strip().isdigit()}
     return nba.debug_bot_answer(player_id, used_ids, samples, currentOnly)
+
+
+@app.post("/api/debug/warm-cache")
+def debug_warm_cache() -> dict[str, Any]:
+    return nba.warm_bot_cache()
 
 
 @app.post("/api/validate")

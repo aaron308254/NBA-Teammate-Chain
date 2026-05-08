@@ -16,6 +16,7 @@ const TURN_SECONDS = 15;
 const BOT_OPENING_CORRECT_ANSWERS = 4;
 const BOT_OPENING_ACCURACY = 0.98;
 const BOT_ACCURACY_DECAY_PER_CORRECT = 0.01;
+const BOT_CORRECT_ANSWER_GRACE_SECONDS = 13.5;
 const emptyLeaderboard: Leaderboard = { top: [], me: null };
 type SoundName = "tick" | "correct" | "wrong" | "win";
 type TurnSnapshot = {
@@ -387,7 +388,7 @@ function Game({
     const answerPromise = shouldHit ? fetchBotAnswer(state.currentTarget.id, state.usedPlayerIds, isCurrentPool).catch(() => null) : null;
     const timeout = window.setTimeout(async () => {
       if (!isSameTurn(turn)) return;
-      const resolvedPick = answerPromise ? await answerPromise : null;
+      const resolvedPick = answerPromise ? await answerPromiseWithDeadline(answerPromise, turn) : null;
       if (!isSameTurn(turn)) return;
       if (shouldHit && resolvedPick) {
         applyConfirmedGuess(resolvedPick, true, turn);
@@ -460,6 +461,16 @@ function Game({
     const candidates = playablePlayers.filter((player) => !usedIds.has(player.id));
     const pool = candidates.length ? candidates : playablePlayers;
     return pool[Math.floor(Math.random() * pool.length)]?.name ?? "Michael Jordan";
+  }
+
+  async function answerPromiseWithDeadline(answerPromise: Promise<PlayerSummary | null>, turn: TurnSnapshot) {
+    const millisecondsLeft = Math.max(0, (turn.expiresAt - Date.now() / 1000 - 0.75) * 1000);
+    const deadline = Math.min(millisecondsLeft, BOT_CORRECT_ANSWER_GRACE_SECONDS * 1000);
+    if (deadline <= 0) return null;
+    return Promise.race<PlayerSummary | null>([
+      answerPromise,
+      new Promise((resolve) => window.setTimeout(() => resolve(null), deadline))
+    ]);
   }
 
   function botAnswerChance(seat: Seat) {
