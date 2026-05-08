@@ -39,11 +39,6 @@ app.add_middleware(
 nba = NBADataService(APP_DIR / "cache")
 
 
-@app.on_event("startup")
-async def warm_nba_cache_on_startup() -> None:
-    asyncio.create_task(asyncio.to_thread(nba.warm_bot_cache))
-
-
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -222,8 +217,8 @@ def debug_bot_answer(player_id: int, used: str = "", samples: int = 8, currentOn
 
 
 @app.post("/api/debug/warm-cache")
-def debug_warm_cache() -> dict[str, Any]:
-    return nba.warm_bot_cache()
+def debug_warm_cache(limit: int = 40) -> dict[str, Any]:
+    return nba.warm_bot_cache(limit)
 
 
 @app.post("/api/validate")
@@ -235,7 +230,12 @@ def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
         return {"valid": False, "reason": "not_current", "player": match.model_dump()}
     if match.id in set(request.used_player_ids):
         return {"valid": False, "reason": "repeat", "player": match.model_dump()}
-    if not nba.are_regular_season_teammates(request.current_player_id, match.id):
+    valid_teammate = (
+        nba.are_current_mode_teammates(request.current_player_id, match.id)
+        if request.current_only
+        else nba.are_regular_season_teammates(request.current_player_id, match.id)
+    )
+    if not valid_teammate:
         return {"valid": False, "reason": "not_teammate", "player": match.model_dump()}
     return {"valid": True, "player": match.model_dump()}
 

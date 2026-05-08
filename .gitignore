@@ -2,7 +2,12 @@ node_modules/
 dist/
 *.log
 backend/*.sqlite3
-backend/cache/
+backend/cache/*
+!backend/cache/current_players_2025_26.json
+!backend/cache/player_seasons.json
+!backend/cache/team_scoring.json
+!backend/cache/teammates.json
+!backend/cache/team_rosters.json
 .env
 .venv/
 __pycache__/
