@@ -15,6 +15,7 @@ import type { AppUser, Leaderboard, PlayerSummary, RoomState, Seat } from "./typ
 const TURN_SECONDS = 15;
 const BOT_OPENING_CORRECT_ANSWERS = 4;
 const BOT_OPENING_ACCURACY = 0.98;
+const BOT_ACCURACY_DECAY_PER_CORRECT = 0.01;
 const emptyLeaderboard: Leaderboard = { top: [], me: null };
 type SoundName = "tick" | "correct" | "wrong" | "win";
 type TurnSnapshot = {
@@ -462,10 +463,11 @@ function Game({
   }
 
   function botAnswerChance(seat: Seat) {
+    const decayedAccuracy = Math.max(0.05, (seat.botAccuracy ?? 0) - seat.correct * BOT_ACCURACY_DECAY_PER_CORRECT);
     if (seat.correct < BOT_OPENING_CORRECT_ANSWERS) {
-      return Math.max(seat.botAccuracy ?? 0, BOT_OPENING_ACCURACY);
+      return Math.max(decayedAccuracy, BOT_OPENING_ACCURACY - seat.correct * BOT_ACCURACY_DECAY_PER_CORRECT);
     }
-    return seat.botAccuracy ?? 0;
+    return decayedAccuracy;
   }
 
   function nextActiveIndex(seats: Seat[], currentIndex: number) {
