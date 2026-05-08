@@ -40,6 +40,12 @@ FALLBACK_PLAYERS = [
     PlayerSummary(id=201566, name="Russell Westbrook"),
     PlayerSummary(id=1626164, name="Devin Booker"),
     PlayerSummary(id=202691, name="Klay Thompson"),
+    PlayerSummary(id=1627783, name="Pascal Siakam"),
+    PlayerSummary(id=1626167, name="Myles Turner"),
+    PlayerSummary(id=1629614, name="Andrew Nembhard"),
+    PlayerSummary(id=1631097, name="Bennedict Mathurin"),
+    PlayerSummary(id=1630174, name="Aaron Nesmith"),
+    PlayerSummary(id=1630167, name="Obi Toppin"),
     PlayerSummary(id=203110, name="Draymond Green"),
     PlayerSummary(id=2738, name="Andre Iguodala"),
     PlayerSummary(id=203954, name="Joel Embiid"),
@@ -58,6 +64,12 @@ FALLBACK_PLAYERS = [
     PlayerSummary(id=1629008, name="Michael Porter Jr."),
     PlayerSummary(id=1628973, name="Jalen Brunson"),
     PlayerSummary(id=203081, name="Damian Lillard"),
+    PlayerSummary(id=201572, name="Brook Lopez"),
+    PlayerSummary(id=1628404, name="Josh Hart"),
+    PlayerSummary(id=203924, name="Jerami Grant"),
+    PlayerSummary(id=1629014, name="Anfernee Simons"),
+    PlayerSummary(id=202331, name="Paul George"),
+    PlayerSummary(id=203078, name="Bradley Beal"),
     PlayerSummary(id=201950, name="Jrue Holiday"),
     PlayerSummary(id=203114, name="Khris Middleton"),
     PlayerSummary(id=1627832, name="Fred VanVleet"),
@@ -149,7 +161,11 @@ TOP_SCORER_FALLBACK_NAMES = [
 
 FALLBACK_TEAMMATES: dict[int, list[int]] = {
     2544: [2548, 202681, 203076, 406],
-    201142: [201939, 201935, 201566, 1626164, 101108, 202681],
+    201566: [201935, 201142, 2544, 203999, 202331],
+    1630169: [1627783, 1626167, 1629614, 1631097, 1630174, 1630167],
+    203081: [203507, 203114, 201572, 201950, 1628404, 203924, 1629014],
+    203076: [2544, 1629029, 202681, 202691],
+    201142: [201939, 201935, 201566, 1626164, 101108, 202681, 203078],
     201939: [201142, 202691, 203110, 2738, 101108],
     201935: [201142, 101108, 201566, 203954],
     893: [937, 23],
@@ -626,7 +642,7 @@ class NBADataService:
         try:
             seasons = self._player_seasons(player_id)
             random.shuffle(seasons)
-            for team_id, season in seasons[:4]:
+            for team_id, season in seasons:
                 candidates = [
                     PlayerSummary(id=int(player["id"]), name=str(player["name"]))
                     for player in self._team_scoring_players(team_id, season)
@@ -637,6 +653,17 @@ class NBADataService:
                 candidates = self._filter_current(candidates, current_only)
                 if candidates:
                     return random.choice(candidates)
+                if min_points > 0:
+                    lower_bar_candidates = [
+                        PlayerSummary(id=int(player["id"]), name=str(player["name"]))
+                        for player in self._team_scoring_players(team_id, season)
+                        if int(player["id"]) != player_id
+                        and int(player["id"]) not in used_player_ids
+                        and float(player["points"]) > 0
+                    ]
+                    lower_bar_candidates = self._filter_current(lower_bar_candidates, current_only)
+                    if lower_bar_candidates:
+                        return random.choice(lower_bar_candidates)
         except Exception:
             pass
 
