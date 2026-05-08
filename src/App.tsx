@@ -8,7 +8,8 @@ import {
   randomStarter,
   updateStats,
   updateUsername,
-  validateGuess
+  validateGuess,
+  websocketUrl
 } from "./api";
 import type { AppUser, Leaderboard, PlayerSummary, RoomState, Seat } from "./types";
 
@@ -234,12 +235,11 @@ function QueueScreen({
   const handedOffRef = useRef(false);
 
   useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const username = encodeURIComponent(user?.username ?? "Player");
     const userId = encodeURIComponent(user?.id ?? "");
     const currentOnly = gamePool === "current" ? "true" : "false";
     const socket = new WebSocket(
-      `${protocol}//${window.location.host}/ws/queue?username=${username}&userId=${userId}&currentOnly=${currentOnly}`
+      websocketUrl(`/ws/queue?username=${username}&userId=${userId}&currentOnly=${currentOnly}`)
     );
     socket.onmessage = (event) => {
       const payload = JSON.parse(event.data) as RoomState & { queued?: number; needed?: number };

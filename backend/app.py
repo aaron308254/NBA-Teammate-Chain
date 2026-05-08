@@ -331,6 +331,18 @@ waiting: list[tuple[WebSocket, Seat, bool]] = []
 rooms: dict[str, Room] = {}
 
 
+async def broadcast_queue_count(current_only: bool) -> None:
+    queued_same_mode = [entry for entry in waiting if entry[2] == current_only]
+    payload = {
+        "event": "queued",
+        "queued": len(queued_same_mode),
+        "needed": 4,
+        "gameMode": "current" if current_only else "all",
+    }
+    for socket, seat, _ in list(queued_same_mode):
+        await socket.send_json({**payload, "youSeatId": seat.id})
+
+
 def room_payload(room: Room, event: str = "state", message: str | None = None) -> dict[str, Any]:
     return {
         "event": event,
@@ -423,15 +435,7 @@ async def queue_socket(websocket: WebSocket) -> None:
     waiting.append((websocket, seat, current_only))
     try:
         queued_same_mode = [entry for entry in waiting if entry[2] == current_only]
-        await websocket.send_json(
-            {
-                "event": "queued",
-                "queued": len(queued_same_mode),
-                "needed": 4,
-                "youSeatId": seat.id,
-                "gameMode": "current" if current_only else "all",
-            }
-        )
+        await broadcast_queue_count(current_only)
         if len(queued_same_mode) >= 4:
             group = queued_same_mode[:4]
             group_ids = {queued_seat.id for _, queued_seat, _ in group}
@@ -473,7 +477,11 @@ async def queue_socket(websocket: WebSocket) -> None:
                     continue
                 seat.active = False
                 seat.eliminated_reason = "not_current"
-            elif not nba.are_regular_season_teammates(room.current_target.id, match.id):
+            elif not (
+                nba.are_current_mode_teammates(room.current_target.id, match.id)
+                if room.current_only
+                else nba.are_regular_season_teammates(room.current_target.id, match.id)
+            ):
                 if (
                     room.finished
                     or room.current_seat().id != seat.id
@@ -503,11 +511,14 @@ async def queue_socket(websocket: WebSocket) -> None:
             room.advance_turn()
             await start_room_timer(room)
     except WebSocketDisconnect:
+        was_waiting = any(queued_seat.id == seat.id for _, queued_seat, _ in waiting)
         waiting[:] = [
             (socket, queued_seat, queued_current_only)
             for socket, queued_seat, queued_current_only in waiting
             if queued_seat.id != seat.id
         ]
+        if was_waiting:
+            await broadcast_queue_count(current_only)
         room = next((candidate for candidate in rooms.values() if seat.id in candidate.sockets), None)
         if room and not room.finished:
             seat.active = False

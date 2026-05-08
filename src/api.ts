@@ -2,6 +2,13 @@ import type { AppUser, Leaderboard, PlayerSummary } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
+export function websocketUrl(path: string): string {
+  const base = API_BASE || window.location.origin;
+  const url = new URL(path, base.endsWith("/") ? base : `${base}/`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
