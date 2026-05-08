@@ -329,18 +329,45 @@ class Room:
 
 waiting: list[tuple[WebSocket, Seat, bool]] = []
 rooms: dict[str, Room] = {}
+queue_lock = asyncio.Lock()
 
 
-async def broadcast_queue_count(current_only: bool) -> None:
-    queued_same_mode = [entry for entry in waiting if entry[2] == current_only]
-    payload = {
-        "event": "queued",
-        "queued": len(queued_same_mode),
-        "needed": 4,
-        "gameMode": "current" if current_only else "all",
-    }
-    for socket, seat, _ in list(queued_same_mode):
-        await socket.send_json({**payload, "youSeatId": seat.id})
+async def safe_send(socket: WebSocket, payload: dict[str, Any]) -> bool:
+    try:
+        await socket.send_json(payload)
+        return True
+    except Exception:
+        return False
+
+
+async def broadcast_queue_count(current_only: bool) -> int:
+    while True:
+        queued_same_mode = [entry for entry in waiting if entry[2] == current_only]
+        payload = {
+            "event": "queued",
+            "queued": len(queued_same_mode),
+            "needed": 4,
+            "gameMode": "current" if current_only else "all",
+        }
+        dead_seat_ids: set[str] = set()
+        for socket, seat, _ in list(queued_same_mode):
+            if not await safe_send(socket, {**payload, "youSeatId": seat.id}):
+                dead_seat_ids.add(seat.id)
+        if not dead_seat_ids:
+            return len(queued_same_mode)
+        waiting[:] = [entry for entry in waiting if entry[1].id not in dead_seat_ids]
+
+
+async def try_start_queued_room(current_only: bool) -> None:
+    while True:
+        queued_same_mode = [entry for entry in waiting if entry[2] == current_only]
+        if len(queued_same_mode) < 4:
+            return
+        group = queued_same_mode[:4]
+        group_ids = {queued_seat.id for _, queued_seat, _ in group}
+        waiting[:] = [entry for entry in waiting if entry[1].id not in group_ids]
+        await create_room(group, current_only)
+        await broadcast_queue_count(current_only)
 
 
 def room_payload(room: Room, event: str = "state", message: str | None = None) -> dict[str, Any]:
@@ -360,14 +387,23 @@ def room_payload(room: Room, event: str = "state", message: str | None = None) -
     }
 
 
-async def broadcast(room: Room, payload: dict[str, Any]) -> None:
+async def broadcast(room: Room, payload: dict[str, Any]) -> set[str]:
+    dead_seat_ids: set[str] = set()
     for seat_id, socket in list(room.sockets.items()):
-        await socket.send_json({**payload, "youSeatId": seat_id})
+        if not await safe_send(socket, {**payload, "youSeatId": seat_id}):
+            dead_seat_ids.add(seat_id)
+    for seat_id in dead_seat_ids:
+        room.sockets.pop(seat_id, None)
+        seat = next((item for item in room.seats if item.id == seat_id), None)
+        if seat and seat.active:
+            seat.active = False
+            seat.eliminated_reason = "disconnect"
+    return dead_seat_ids
 
 
 async def finish_room(room: Room) -> None:
     room.finished = True
-    if room.timer_task:
+    if room.timer_task and room.timer_task is not asyncio.current_task():
         room.timer_task.cancel()
     winner = room.active_seats()[0] if room.active_seats() else None
     with db() as conn:
@@ -386,10 +422,20 @@ async def finish_room(room: Room) -> None:
 
 
 async def start_room_timer(room: Room) -> None:
-    if room.timer_task:
+    if room.timer_task and room.timer_task is not asyncio.current_task():
         room.timer_task.cancel()
     room.expires_at = time.time() + TURN_SECONDS
-    await broadcast(room, room_payload(room))
+    payload = room_payload(room)
+    dead_seat_ids = await broadcast(room, payload)
+    if room.finished:
+        return
+    if len(room.active_seats()) <= 1:
+        await finish_room(room)
+        return
+    if payload.get("currentSeatId") in dead_seat_ids:
+        room.advance_turn()
+        await start_room_timer(room)
+        return
 
     async def expire() -> None:
         await asyncio.sleep(TURN_SECONDS)
@@ -432,15 +478,11 @@ async def queue_socket(websocket: WebSocket) -> None:
         user_id=websocket.query_params.get("userId"),
     )
     current_only = websocket.query_params.get("currentOnly", "").lower() in {"1", "true", "yes"}
-    waiting.append((websocket, seat, current_only))
-    try:
-        queued_same_mode = [entry for entry in waiting if entry[2] == current_only]
+    async with queue_lock:
+        waiting.append((websocket, seat, current_only))
         await broadcast_queue_count(current_only)
-        if len(queued_same_mode) >= 4:
-            group = queued_same_mode[:4]
-            group_ids = {queued_seat.id for _, queued_seat, _ in group}
-            waiting[:] = [entry for entry in waiting if entry[1].id not in group_ids]
-            await create_room(group, current_only)
+        await try_start_queued_room(current_only)
+    try:
         while True:
             payload = await websocket.receive_json()
             room = next((candidate for candidate in rooms.values() if seat.id in candidate.sockets), None)
@@ -511,20 +553,25 @@ async def queue_socket(websocket: WebSocket) -> None:
             room.advance_turn()
             await start_room_timer(room)
     except WebSocketDisconnect:
-        was_waiting = any(queued_seat.id == seat.id for _, queued_seat, _ in waiting)
-        waiting[:] = [
-            (socket, queued_seat, queued_current_only)
-            for socket, queued_seat, queued_current_only in waiting
-            if queued_seat.id != seat.id
-        ]
-        if was_waiting:
-            await broadcast_queue_count(current_only)
+        async with queue_lock:
+            was_waiting = any(queued_seat.id == seat.id for _, queued_seat, _ in waiting)
+            waiting[:] = [
+                (socket, queued_seat, queued_current_only)
+                for socket, queued_seat, queued_current_only in waiting
+                if queued_seat.id != seat.id
+            ]
+            if was_waiting:
+                await broadcast_queue_count(current_only)
         room = next((candidate for candidate in rooms.values() if seat.id in candidate.sockets), None)
         if room and not room.finished:
+            was_current = room.current_seat().id == seat.id
+            room.sockets.pop(seat.id, None)
             seat.active = False
             seat.eliminated_reason = "disconnect"
             if len(room.active_seats()) <= 1:
                 await finish_room(room)
-            else:
+            elif was_current:
                 room.advance_turn()
                 await start_room_timer(room)
+            else:
+                await broadcast(room, room_payload(room))

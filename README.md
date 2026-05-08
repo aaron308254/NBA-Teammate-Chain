@@ -41,3 +41,11 @@ The backend uses live NBA data when `nba_api` can reach stats.nba.com. A small f
 `.github/workflows/deploy.yml` builds and deploys the Vite frontend to GitHub Pages on pushes to `main`.
 
 GitHub Pages only hosts static frontend files. The FastAPI backend still needs a separate host for `/api/*` and `/ws/*`. After deploying the backend, set a repository variable named `VITE_API_BASE` to that backend URL before the Pages workflow runs.
+
+For the live-player queue, the backend must run as a single process because queue and room state is stored in memory. On Render, use this start command:
+
+```bash
+uvicorn backend.app:app --host 0.0.0.0 --port $PORT --workers 1
+```
+
+If `VITE_API_BASE` is changed, rerun the GitHub Pages workflow so the static frontend picks up the backend URL.
