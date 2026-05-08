@@ -120,7 +120,7 @@ function Home({
 
       <section className="home-grid">
         <ModeCard
-          title="Only Current Players (25-26)"
+          title="Only Active Players (25-26)"
           description="Answers can only be of teammates that played minutes in the 2025-2026 NBA season."
           accent="current"
           onQueue={() => onQueue("current")}
