@@ -140,7 +140,7 @@ function Home({
         <section className="how-card">
           <h2>How it works</h2>
           <p>
-            A top-75 all-time scorer starts the chain. On your turn, name one regular-season NBA teammate before the
+            An all-star or top-75 all-time scorer starts the chain. On your turn, name one regular-season NBA teammate before the
             clock hits zero. Repeats are blocked, wrong links eliminate you, and the last active player wins.
           </p>
         </section>
