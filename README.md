@@ -2,6 +2,9 @@
 
 A full-stack NBA teammate-link game built with React, TypeScript, FastAPI, `nba_api`, and `pandas`.
 
+<img width="1895" height="898" alt="image" src="https://github.com/user-attachments/assets/208a7935-a671-4bfb-a87a-28cd59fefde0" />
+
+
 ## Setup
 
 ```powershell
