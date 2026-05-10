@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import { Bot, Crown, LogIn, RadioTower, Search, ShieldX, Trophy, UserRound, Users } from "lucide-react";
 import {
@@ -18,6 +18,7 @@ const BOT_OPENING_CORRECT_ANSWERS = 4;
 const BOT_OPENING_ACCURACY = 0.98;
 const BOT_ACCURACY_DECAY_PER_CORRECT = 0.01;
 const BOT_CORRECT_ANSWER_GRACE_SECONDS = 13.5;
+const GOOGLE_CLIENT_ID = "544958398180-fvtbm8t356datokqrbes6aprqrf70amj.apps.googleusercontent.com";
 const emptyLeaderboard: Leaderboard = { top: [], me: null };
 type SoundName = "tick" | "correct" | "wrong" | "win";
 type TurnSnapshot = {
@@ -30,6 +31,12 @@ type SeatBubble = {
   tone: "thinking" | "correct" | "wrong";
 };
 type GamePool = "all" | "current";
+
+declare global {
+  interface Window {
+    handleCredentialResponse?: (response: { credential?: string }) => void;
+  }
+}
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -62,30 +69,49 @@ function Home({
 }) {
   const [username, setUsername] = useState(user?.username ?? "");
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? GOOGLE_CLIENT_ID;
+
+  useEffect(() => {
+    setUsername(user?.username ?? "");
+  }, [user?.username]);
 
   useEffect(() => {
     if (!clientId || user || !googleButtonRef.current) return;
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
+    window.handleCredentialResponse = (response: { credential?: string }) => {
+      if (response.credential) onLogin(response.credential);
+    };
+    const renderGoogleButton = () => {
       const google = (window as unknown as { google?: any }).google;
       if (!googleButtonRef.current || !google?.accounts?.id) return;
       google.accounts.id.initialize({
         client_id: clientId,
-        callback: (response: { credential: string }) => onLogin(response.credential)
+        callback: window.handleCredentialResponse
       });
+      googleButtonRef.current.innerHTML = "";
       google.accounts.id.renderButton(googleButtonRef.current, {
         theme: "filled_black",
         size: "large",
         shape: "pill"
       });
     };
-    document.body.appendChild(script);
+    const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
+    if (existingScript) {
+      if ((window as unknown as { google?: any }).google?.accounts?.id) {
+        renderGoogleButton();
+      } else {
+        existingScript.addEventListener("load", renderGoogleButton, { once: true });
+      }
+    } else {
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = renderGoogleButton;
+      document.body.appendChild(script);
+    }
     return () => {
-      script.remove();
+      existingScript?.removeEventListener("load", renderGoogleButton);
+      if (window.handleCredentialResponse) delete window.handleCredentialResponse;
     };
   }, [clientId, onLogin, user]);
 
@@ -105,10 +131,18 @@ function Home({
                 onChange={(event) => setUsername(event.target.value)}
                 onBlur={() => username.trim() && username !== user.username && onUsername(username)}
               />
-              <span className="wins-pill">{user.wins} wins</span>
+              <div className="user-stats" aria-label="Player stats">
+                <span className="wins-pill">{user.wins}W</span>
+                <span className="wins-pill">{user.losses}L</span>
+                <span className="wins-pill">{user.winPercentage}%</span>
+                <span className="wins-pill">{user.longestChain} chain</span>
+              </div>
             </>
           ) : clientId ? (
-            <div ref={googleButtonRef} />
+            <>
+              <div id="g_id_onload" data-client_id={clientId} data-callback="handleCredentialResponse" />
+              <div className="g_id_signin" data-type="standard" ref={googleButtonRef} />
+            </>
           ) : (
             <button className="ghost-button" type="button" disabled>
               <LogIn size={17} />
@@ -212,10 +246,59 @@ function LeaderboardPanel({ leaderboard, user }: { leaderboard: Leaderboard; use
         <div className="my-rank">
           <span>Stats</span>
           <strong>{user.username}</strong>
-          <span>{user.winPercentage}% win rate</span>
+          <span>{user.winPercentage}% win, {user.longestChain} chain</span>
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function FirstLoginNameModal({
+  user,
+  onSave
+}: {
+  user: AppUser;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const value = name.trim();
+    if (value.length < 2) {
+      setError("Enter at least 2 characters.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    await onSave(value);
+    setSaving(false);
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="name-modal" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="new-player-name">
+        <div className="avatar modal-avatar">{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <UserRound size={24} />}</div>
+        <label id="new-player-name" htmlFor="player-name">
+          Create your player name
+        </label>
+        <input
+          id="player-name"
+          value={name}
+          maxLength={24}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Player name"
+          autoComplete="nickname"
+          autoFocus
+        />
+        {error ? <p className="modal-error">{error}</p> : null}
+        <button className="primary-action" type="submit" disabled={saving}>
+          {saving ? "Saving..." : "Save name"}
+        </button>
+      </form>
+    </div>
   );
 }
 
@@ -296,7 +379,7 @@ function Game({
   onlineSocket: WebSocket | null;
   playSound: (name: SoundName) => void;
   onExit: () => void;
-  onStats: (user: AppUser, leaderboard: Leaderboard) => void;
+  onStats: (user: AppUser, leaderboard?: Leaderboard) => void;
 }) {
   const [state, setState] = useState<RoomState>(initialState);
   const [guess, setGuess] = useState("");
@@ -369,10 +452,12 @@ function Game({
         setState(payload);
         setGuess("");
         setShowSuggestions(false);
+        const updatedUser = payload.youSeatId ? payload.usersBySeatId?.[payload.youSeatId] : null;
+        if (updatedUser) onStats(updatedUser);
       }
     };
     return () => socket.close();
-  }, [mode, onlineSocket]);
+  }, [mode, onlineSocket, onStats]);
 
   useEffect(() => {
     if (mode !== "ai" || state.finished) return;
@@ -405,11 +490,11 @@ function Game({
   }, [secondsLeft, mode, state.finished, currentSeat?.id]);
 
   useEffect(() => {
-    if (!state.finished || submittedStatsRef.current || !user) return;
+    if (mode !== "ai" || !state.finished || submittedStatsRef.current || !user) return;
     const won = state.winnerSeatId === youSeatId;
     submittedStatsRef.current = true;
-    updateStats(user.id, won, humanCorrect).then((payload) => onStats(payload.user, payload.leaderboard));
-  }, [humanCorrect, onStats, state.finished, state.winnerSeatId, user, youSeatId]);
+    updateStats(user.id, won, humanCorrect, state.chain.length).then((payload) => onStats(payload.user, payload.leaderboard));
+  }, [humanCorrect, mode, onStats, state.chain.length, state.finished, state.winnerSeatId, user, youSeatId]);
 
   useEffect(() => {
     if (state.finished || secondsLeft <= 0 || lastTickRef.current === secondsLeft) return;
@@ -733,6 +818,7 @@ export default function App() {
   const [mode, setMode] = useState<"ai" | "online">("ai");
   const [gamePool, setGamePool] = useState<GamePool>("all");
   const [onlineSocket, setOnlineSocket] = useState<WebSocket | null>(null);
+  const [firstLoginUser, setFirstLoginUser] = useState<AppUser | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
@@ -806,15 +892,27 @@ export default function App() {
     setView("game");
   }
 
-  async function handleGoogleLogin(credential: string) {
+  const handleGoogleLogin = useCallback(async (credential: string) => {
     const payload = await loginWithGoogle(credential);
-    if (payload.user) persistUser(payload.user);
-  }
+    if (payload.user) {
+      persistUser(payload.user);
+      if (payload.isNewUser) setFirstLoginUser(payload.user);
+    }
+  }, []);
 
   async function handleUsername(value: string) {
     if (!user) return;
     const payload = await updateUsername(user.id, value);
     if (payload.user) persistUser(payload.user);
+  }
+
+  async function handleFirstLoginName(value: string) {
+    if (!firstLoginUser) return;
+    const payload = await updateUsername(firstLoginUser.id, value);
+    if (payload.user) {
+      persistUser(payload.user);
+      setFirstLoginUser(null);
+    }
   }
 
   if (view === "queue") {
@@ -850,24 +948,27 @@ export default function App() {
         }}
         onStats={(nextUser, nextLeaderboard) => {
           persistUser(nextUser);
-          setLeaderboard(nextLeaderboard);
+          if (nextLeaderboard) setLeaderboard(nextLeaderboard);
         }}
       />
     );
   }
 
   return (
-    <Home
-      user={user}
-      leaderboard={leaderboard}
-      onQueue={(nextGamePool) => {
-        playSound("tick");
-        setGamePool(nextGamePool);
-        setView("queue");
-      }}
-      onAi={startAiGame}
-      onLogin={handleGoogleLogin}
-      onUsername={handleUsername}
-    />
+    <>
+      <Home
+        user={user}
+        leaderboard={leaderboard}
+        onQueue={(nextGamePool) => {
+          playSound("tick");
+          setGamePool(nextGamePool);
+          setView("queue");
+        }}
+        onAi={startAiGame}
+        onLogin={handleGoogleLogin}
+        onUsername={handleUsername}
+      />
+      {firstLoginUser ? <FirstLoginNameModal user={firstLoginUser} onSave={handleFirstLoginName} /> : null}
+    </>
   );
 }

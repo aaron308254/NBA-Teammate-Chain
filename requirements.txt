@@ -3,3 +3,4 @@ uvicorn[standard]==0.34.0
 pandas==2.3.3
 nba_api==1.11.4
 pydantic==2.10.6
+google-auth==2.35.0

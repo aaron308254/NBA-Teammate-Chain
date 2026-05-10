@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 import os
 import random
 import sqlite3
@@ -14,6 +12,8 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 from pydantic import BaseModel
 
 from .nba_data import NBADataService, PlayerSummary, normalize_name
@@ -22,6 +22,7 @@ from .nba_data import NBADataService, PlayerSummary, normalize_name
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "teammate_chain.sqlite3"
 TURN_SECONDS = 15
+GOOGLE_CLIENT_ID = "544958398180-fvtbm8t356datokqrbes6aprqrf70amj.apps.googleusercontent.com"
 
 app = FastAPI(title="NBA Teammate Chain API")
 app.add_middleware(
@@ -57,10 +58,14 @@ def init_db() -> None:
                 wins INTEGER NOT NULL DEFAULT 0,
                 losses INTEGER NOT NULL DEFAULT 0,
                 correct_answers INTEGER NOT NULL DEFAULT 0,
+                longest_chain INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL
             )
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "longest_chain" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN longest_chain INTEGER NOT NULL DEFAULT 0")
         conn.commit()
 
 
@@ -88,15 +93,15 @@ class StatsRequest(BaseModel):
     user_id: str
     won: bool
     correct_answers: int = 0
+    longest_chain: int = 0
 
 
-def decode_google_credential(credential: str) -> dict[str, Any]:
-    parts = credential.split(".")
-    if len(parts) < 2:
-        raise ValueError("Invalid Google credential")
-    payload = parts[1] + "=" * (-len(parts[1]) % 4)
-    decoded = base64.urlsafe_b64decode(payload.encode("utf-8"))
-    return json.loads(decoded)
+def verify_google_credential(credential: str) -> dict[str, Any]:
+    expected_aud = os.getenv("GOOGLE_CLIENT_ID", GOOGLE_CLIENT_ID)
+    payload = id_token.verify_oauth2_token(credential, google_requests.Request(), expected_aud)
+    if payload.get("aud") != expected_aud:
+        raise ValueError("Google client id mismatch")
+    return payload
 
 
 def public_user(row: sqlite3.Row, rank: int | None = None) -> dict[str, Any]:
@@ -110,16 +115,18 @@ def public_user(row: sqlite3.Row, rank: int | None = None) -> dict[str, Any]:
         "wins": wins,
         "losses": losses,
         "correctAnswers": int(row["correct_answers"]),
+        "longestChain": int(row["longest_chain"]),
         "winPercentage": round((wins / total) * 100, 1) if total else 0,
         "rank": rank,
     }
 
 
-def upsert_google_user(payload: dict[str, Any], username: str | None) -> dict[str, Any]:
+def upsert_google_user(payload: dict[str, Any], username: str | None) -> tuple[dict[str, Any], bool]:
     user_id = f"google:{payload['sub']}"
     email = payload.get("email")
     avatar_url = payload.get("picture")
     default_username = username or payload.get("name") or (email.split("@")[0] if email else "Hooper")
+    is_new = False
     with db() as conn:
         existing = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if existing:
@@ -127,13 +134,14 @@ def upsert_google_user(payload: dict[str, Any], username: str | None) -> dict[st
                 conn.execute("UPDATE users SET username = ? WHERE id = ?", (username.strip()[:24], user_id))
             conn.execute("UPDATE users SET email = ?, avatar_url = ? WHERE id = ?", (email, avatar_url, user_id))
         else:
+            is_new = True
             conn.execute(
                 "INSERT INTO users (id, email, username, avatar_url, created_at) VALUES (?, ?, ?, ?, ?)",
                 (user_id, email, default_username.strip()[:24], avatar_url, int(time.time())),
             )
         conn.commit()
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-    return public_user(row)
+    return public_user(row), is_new
 
 
 def leaderboard_response(user_id: str | None = None) -> dict[str, Any]:
@@ -242,12 +250,12 @@ def validate_guess(request: ValidateGuessRequest) -> dict[str, Any]:
 
 @app.post("/api/auth/google")
 async def google_auth(request: GoogleAuthRequest) -> dict[str, Any]:
-    payload = decode_google_credential(request.credential)
-    aud = payload.get("aud")
-    expected_aud = os.getenv("GOOGLE_CLIENT_ID")
-    if expected_aud and aud != expected_aud:
-        return {"error": "Google client id mismatch"}
-    return {"user": upsert_google_user(payload, request.username)}
+    try:
+        payload = verify_google_credential(request.credential)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    user, is_new = upsert_google_user(payload, request.username)
+    return {"user": user, "isNewUser": is_new}
 
 
 @app.post("/api/me/username")
@@ -273,10 +281,19 @@ async def update_stats(request: StatsRequest) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE users
-            SET wins = wins + ?, losses = losses + ?, correct_answers = correct_answers + ?
+            SET wins = wins + ?,
+                losses = losses + ?,
+                correct_answers = correct_answers + ?,
+                longest_chain = MAX(longest_chain, ?)
             WHERE id = ?
             """,
-            (1 if request.won else 0, 0 if request.won else 1, max(0, request.correct_answers), request.user_id),
+            (
+                1 if request.won else 0,
+                0 if request.won else 1,
+                max(0, request.correct_answers),
+                max(0, request.longest_chain),
+                request.user_id,
+            ),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM users WHERE id = ?", (request.user_id,)).fetchone()
@@ -406,19 +423,36 @@ async def finish_room(room: Room) -> None:
     if room.timer_task and room.timer_task is not asyncio.current_task():
         room.timer_task.cancel()
     winner = room.active_seats()[0] if room.active_seats() else None
+    users_by_seat_id: dict[str, Any] = {}
     with db() as conn:
         for seat in room.seats:
             if seat.user_id:
                 conn.execute(
                     """
                     UPDATE users
-                    SET wins = wins + ?, losses = losses + ?, correct_answers = correct_answers + ?
+                    SET wins = wins + ?,
+                        losses = losses + ?,
+                        correct_answers = correct_answers + ?,
+                        longest_chain = MAX(longest_chain, ?)
                     WHERE id = ?
                     """,
-                    (1 if winner and seat.id == winner.id else 0, 0 if winner and seat.id == winner.id else 1, seat.correct, seat.user_id),
+                    (
+                        1 if winner and seat.id == winner.id else 0,
+                        0 if winner and seat.id == winner.id else 1,
+                        seat.correct,
+                        len(room.chain),
+                        seat.user_id,
+                    ),
                 )
         conn.commit()
-    await broadcast(room, room_payload(room, "game_over"))
+        for seat in room.seats:
+            if seat.user_id:
+                row = conn.execute("SELECT * FROM users WHERE id = ?", (seat.user_id,)).fetchone()
+                if row:
+                    users_by_seat_id[seat.id] = public_user(row)
+    payload = room_payload(room, "game_over")
+    payload["usersBySeatId"] = users_by_seat_id
+    await broadcast(room, payload)
 
 
 async def start_room_timer(room: Room) -> None:

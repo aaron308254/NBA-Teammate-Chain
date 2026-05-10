@@ -10,6 +10,7 @@ export type LeaderboardUser = {
   wins: number;
   losses: number;
   correctAnswers: number;
+  longestChain: number;
   winPercentage: number;
   rank?: number | null;
 };
@@ -36,6 +37,7 @@ export type RoomState = {
   roomId?: string;
   gameMode?: "all" | "current";
   message?: string | null;
+  usersBySeatId?: Record<string, AppUser>;
   seats: Seat[];
   currentSeatId: string | null;
   currentTarget: PlayerSummary;

@@ -14,7 +14,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Optional Google login:
+Optional Google login override. The app includes the configured Google client ID by default:
 
 ```powershell
 $env:VITE_GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"

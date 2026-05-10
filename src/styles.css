@@ -83,6 +83,12 @@ button:disabled {
   min-height: 44px;
 }
 
+.user-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .auth-panel input {
   width: min(12rem, 32vw);
   border: 1px solid oklch(92% 0.02 85 / 0.2);
@@ -118,6 +124,64 @@ button:disabled {
   background: oklch(92% 0.02 85 / 0.09);
   color: oklch(94% 0.015 85);
   padding: 0.7rem 0.9rem;
+}
+
+.wins-pill {
+  white-space: nowrap;
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: oklch(8% 0.03 260 / 0.68);
+  padding: 1rem;
+}
+
+.name-modal {
+  display: grid;
+  justify-items: stretch;
+  gap: 0.9rem;
+  width: min(25rem, 100%);
+  border: 1px solid oklch(92% 0.02 85 / 0.2);
+  border-radius: 8px;
+  background: oklch(18% 0.035 260);
+  box-shadow: 0 30px 90px oklch(4% 0.035 260 / 0.52);
+  padding: clamp(1.2rem, 5vw, 1.7rem);
+}
+
+.name-modal label {
+  color: oklch(94% 0.015 85);
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+
+.name-modal input {
+  min-height: 3.2rem;
+  border: 1px solid oklch(92% 0.02 85 / 0.22);
+  border-radius: 8px;
+  background: oklch(94% 0.01 85);
+  color: oklch(18% 0.03 260);
+  padding: 0.8rem 0.9rem;
+  outline: none;
+}
+
+.name-modal input:focus {
+  border-color: oklch(73% 0.18 58);
+  box-shadow: 0 0 0 3px oklch(73% 0.18 58 / 0.18);
+}
+
+.modal-avatar {
+  width: 3rem;
+  height: 3rem;
+}
+
+.modal-error {
+  margin: -0.25rem 0 0;
+  color: oklch(76% 0.18 28);
+  font-size: 0.9rem;
 }
 
 .home-grid {
@@ -890,6 +954,11 @@ button:disabled {
   .action-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .user-stats {
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
   .auth-panel input,

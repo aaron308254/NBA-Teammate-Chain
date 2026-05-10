@@ -59,14 +59,14 @@ export async function fetchBotAnswer(playerId: number, usedIds: number[], curren
   return payload.player;
 }
 
-export async function updateStats(userId: string, won: boolean, correctAnswers: number) {
+export async function updateStats(userId: string, won: boolean, correctAnswers: number, longestChain: number) {
   return request<{ user: AppUser; leaderboard: Leaderboard }>("/api/stats", {
     method: "POST",
-    body: JSON.stringify({ user_id: userId, won, correct_answers: correctAnswers })
+    body: JSON.stringify({ user_id: userId, won, correct_answers: correctAnswers, longest_chain: longestChain })
   });
 }
 
-export async function loginWithGoogle(credential: string, username?: string): Promise<{ user: AppUser; error?: string }> {
+export async function loginWithGoogle(credential: string, username?: string): Promise<{ user: AppUser; isNewUser?: boolean; error?: string }> {
   return request("/api/auth/google", {
     method: "POST",
     body: JSON.stringify({ credential, username })
