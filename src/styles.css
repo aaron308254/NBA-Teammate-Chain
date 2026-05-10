@@ -442,6 +442,20 @@ button:disabled {
     linear-gradient(145deg, oklch(15% 0.035 252), oklch(22% 0.05 278));
 }
 
+.game-shell.result-loss {
+  background:
+    radial-gradient(circle at 50% 18%, oklch(58% 0.18 28 / 0.34), transparent 30rem),
+    radial-gradient(circle at 82% 72%, oklch(48% 0.14 28 / 0.22), transparent 24rem),
+    linear-gradient(145deg, oklch(17% 0.04 252), oklch(25% 0.08 28));
+}
+
+.game-shell.result-win {
+  background:
+    radial-gradient(circle at 50% 18%, oklch(72% 0.16 148 / 0.34), transparent 30rem),
+    radial-gradient(circle at 82% 72%, oklch(64% 0.15 181 / 0.24), transparent 24rem),
+    linear-gradient(145deg, oklch(16% 0.04 252), oklch(24% 0.08 148));
+}
+
 .score-rail,
 .rules-rail {
   align-self: stretch;
@@ -881,7 +895,8 @@ button:disabled {
   white-space: nowrap;
 }
 
-.winner-panel {
+.winner-panel,
+.result-panel {
   display: grid;
   justify-items: center;
   gap: 1rem;
@@ -891,9 +906,36 @@ button:disabled {
   padding: 2rem;
 }
 
-.winner-panel h2 {
+.result-panel.loss {
+  border-color: oklch(64% 0.2 28 / 0.42);
+  background: oklch(58% 0.17 28 / 0.12);
+}
+
+.result-panel.win {
+  border-color: oklch(72% 0.17 148 / 0.42);
+  background: oklch(64% 0.15 148 / 0.12);
+}
+
+.result-panel.loss svg {
+  color: oklch(74% 0.18 28);
+}
+
+.result-panel.win svg {
+  color: oklch(78% 0.16 148);
+}
+
+.winner-panel h2,
+.result-panel h2 {
   margin: 0;
   font-size: clamp(2rem, 6vw, 4rem);
+}
+
+.result-panel p {
+  max-width: 31rem;
+  margin: 0;
+  color: oklch(88% 0.018 80 / 0.74);
+  line-height: 1.45;
+  text-align: center;
 }
 
 @keyframes shake {

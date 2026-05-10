@@ -19,6 +19,7 @@ const BOT_OPENING_ACCURACY = 0.98;
 const BOT_ACCURACY_DECAY_PER_CORRECT = 0.01;
 const BOT_CORRECT_ANSWER_GRACE_SECONDS = 13.5;
 const GOOGLE_CLIENT_ID = "544958398180-fvtbm8t356datokqrbes6aprqrf70amj.apps.googleusercontent.com";
+const PENDING_STATS_KEY = "teammate-chain-pending-stats";
 const emptyLeaderboard: Leaderboard = { top: [], me: null };
 type SoundName = "tick" | "correct" | "wrong" | "win";
 type TurnSnapshot = {
@@ -31,6 +32,14 @@ type SeatBubble = {
   tone: "thinking" | "correct" | "wrong";
 };
 type GamePool = "all" | "current";
+type GameOutcome = "win" | "loss";
+type PendingStatEvent = {
+  eventId: string;
+  userId: string;
+  won: boolean;
+  correctAnswers: number;
+  longestChain: number;
+};
 
 declare global {
   interface Window {
@@ -40,6 +49,35 @@ declare global {
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function readPendingStats() {
+  const raw = localStorage.getItem(PENDING_STATS_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as PendingStatEvent[];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingStats(events: PendingStatEvent[]) {
+  if (events.length) {
+    localStorage.setItem(PENDING_STATS_KEY, JSON.stringify(events));
+  } else {
+    localStorage.removeItem(PENDING_STATS_KEY);
+  }
+}
+
+function queuePendingStat(event: PendingStatEvent) {
+  const events = readPendingStats();
+  if (!events.some((item) => item.eventId === event.eventId)) {
+    writePendingStats([...events, event]);
+  }
+}
+
+function clearPendingStat(eventId: string) {
+  writePendingStats(readPendingStats().filter((event) => event.eventId !== eventId));
 }
 
 function makeSeat(username: string, botAccuracy?: number): Seat {
@@ -392,13 +430,22 @@ function Game({
   const [humanCorrect, setHumanCorrect] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const submittedStatsRef = useRef(false);
+  const statEventIdRef = useRef(`ai:${crypto.randomUUID()}`);
   const lastTickRef = useRef<number | null>(null);
   const stateRef = useRef(state);
   const gameOverSoundRef = useRef(false);
 
   const youSeatId = state.youSeatId ?? state.seats.find((seat) => !seat.botAccuracy)?.id ?? state.seats[0]?.id;
+  const yourSeat = state.seats.find((seat) => seat.id === youSeatId);
   const currentSeat = state.seats.find((seat) => seat.id === state.currentSeatId);
   const isYourTurn = currentSeat?.id === youSeatId && !state.finished;
+  const gameOutcome: GameOutcome | null = state.finished
+    ? state.winnerSeatId === youSeatId
+      ? "win"
+      : "loss"
+    : yourSeat && !yourSeat.active
+      ? "loss"
+      : null;
   const gamePool = state.gameMode ?? "all";
   const isCurrentPool = gamePool === "current";
   const playablePlayers = isCurrentPool && currentPlayers.length ? currentPlayers : allPlayers;
@@ -490,11 +537,9 @@ function Game({
   }, [secondsLeft, mode, state.finished, currentSeat?.id]);
 
   useEffect(() => {
-    if (mode !== "ai" || !state.finished || submittedStatsRef.current || !user) return;
-    const won = state.winnerSeatId === youSeatId;
-    submittedStatsRef.current = true;
-    updateStats(user.id, won, humanCorrect, state.chain.length).then((payload) => onStats(payload.user, payload.leaderboard));
-  }, [humanCorrect, mode, onStats, state.chain.length, state.finished, state.winnerSeatId, user, youSeatId]);
+    if (mode !== "ai" || !gameOutcome || !user) return;
+    submitAiStats(gameOutcome);
+  }, [gameOutcome, humanCorrect, mode, state.chain.length, user?.id]);
 
   useEffect(() => {
     if (state.finished || secondsLeft <= 0 || lastTickRef.current === secondsLeft) return;
@@ -503,10 +548,36 @@ function Game({
   }, [playSound, secondsLeft, state.finished]);
 
   useEffect(() => {
-    if (!state.finished || gameOverSoundRef.current) return;
+    if (!gameOutcome || gameOverSoundRef.current) return;
     gameOverSoundRef.current = true;
-    playSound("win");
-  }, [playSound, state.finished]);
+    playSound(gameOutcome === "win" ? "win" : "wrong");
+  }, [gameOutcome, playSound]);
+
+  function submitAiStats(outcome: GameOutcome) {
+    if (mode !== "ai" || submittedStatsRef.current || !user) return;
+    const event: PendingStatEvent = {
+      eventId: statEventIdRef.current,
+      userId: user.id,
+      won: outcome === "win",
+      correctAnswers: humanCorrect,
+      longestChain: state.chain.length
+    };
+    submittedStatsRef.current = true;
+    queuePendingStat(event);
+    updateStats(event.userId, event.won, event.correctAnswers, event.longestChain, event.eventId)
+      .then((payload) => {
+        clearPendingStat(event.eventId);
+        onStats(payload.user, payload.leaderboard);
+      })
+      .catch(() => {
+        submittedStatsRef.current = false;
+      });
+  }
+
+  function exitGame() {
+    if (gameOutcome) submitAiStats(gameOutcome);
+    onExit();
+  }
 
   function isSameTurn(turn: TurnSnapshot) {
     const latest = stateRef.current;
@@ -593,6 +664,7 @@ function Game({
   function eliminateLocal(seatId: string, reason: string, turn?: TurnSnapshot, fallbackText?: string) {
     if (turn && !isSameTurn(turn)) return;
     playSound("wrong");
+    const remainingAfterElimination = stateRef.current.seats.filter((seat) => seat.active && seat.id !== seatId);
     const bubbleText = reason === "time" ? "Time" : fallbackText;
     if (bubbleText) {
       markBubble(seatId, bubbleText, "wrong");
@@ -610,6 +682,11 @@ function Game({
     });
     setGuess("");
     setShowSuggestions(false);
+    if (mode === "ai" && seatId === youSeatId) {
+      submitAiStats("loss");
+    } else if (mode === "ai" && remainingAfterElimination.length === 1 && remainingAfterElimination[0].id === youSeatId) {
+      submitAiStats("win");
+    }
   }
 
   async function applyLocalGuess(value: string, fromBot = false, turn?: TurnSnapshot) {
@@ -692,9 +769,16 @@ function Game({
   }
 
   const winner = state.seats.find((seat) => seat.id === state.winnerSeatId);
+  const resultTitle = gameOutcome === "win" ? "You win" : state.finished ? `${winner?.username ?? "Nobody"} wins` : "You're out";
+  const resultDetail =
+    gameOutcome === "win"
+      ? "Result saved. Your chain survived the table."
+      : state.finished
+        ? "Result saved. Queue up again when you're ready."
+        : "Result saved. The remaining players can finish this round.";
 
   return (
-    <main className={`game-shell ${isYourTurn ? "your-turn" : "waiting-turn"}`}>
+    <main className={`game-shell ${isYourTurn ? "your-turn" : "waiting-turn"} ${gameOutcome ? `result-${gameOutcome}` : ""}`}>
       <section className="score-rail">
         <div className="rail-title">
           <Crown size={18} />
@@ -738,12 +822,13 @@ function Game({
           <h1>{state.currentTarget.name}</h1>
         </div>
 
-        {state.finished ? (
-          <div className="winner-panel">
-            <Trophy size={34} />
-            <h2>{winner?.username ?? "Nobody"} wins</h2>
-            <button className="primary-action" type="button" onClick={onExit}>
-              Back home
+        {gameOutcome ? (
+          <div className={`result-panel ${gameOutcome}`}>
+            {gameOutcome === "win" ? <Trophy size={34} /> : <ShieldX size={34} />}
+            <h2>{resultTitle}</h2>
+            <p>{resultDetail}</p>
+            <button className="primary-action" type="button" onClick={exitGame}>
+              Back to Home
             </button>
           </div>
         ) : (
@@ -826,6 +911,20 @@ export default function App() {
       setAllPlayers(payload.allPlayers);
       setCurrentPlayers(payload.currentPlayers);
       setLeaderboard(payload.leaderboard);
+    });
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    const pending = readPendingStats().filter((event) => event.userId === user.id);
+    pending.forEach((event) => {
+      updateStats(event.userId, event.won, event.correctAnswers, event.longestChain, event.eventId)
+        .then((payload) => {
+          clearPendingStat(event.eventId);
+          persistUser(payload.user);
+          setLeaderboard(payload.leaderboard);
+        })
+        .catch(() => undefined);
     });
   }, [user?.id]);
 

@@ -59,10 +59,16 @@ export async function fetchBotAnswer(playerId: number, usedIds: number[], curren
   return payload.player;
 }
 
-export async function updateStats(userId: string, won: boolean, correctAnswers: number, longestChain: number) {
+export async function updateStats(userId: string, won: boolean, correctAnswers: number, longestChain: number, eventId?: string) {
   return request<{ user: AppUser; leaderboard: Leaderboard }>("/api/stats", {
     method: "POST",
-    body: JSON.stringify({ user_id: userId, won, correct_answers: correctAnswers, longest_chain: longestChain })
+    body: JSON.stringify({
+      user_id: userId,
+      won,
+      correct_answers: correctAnswers,
+      longest_chain: longestChain,
+      event_id: eventId
+    })
   });
 }
 

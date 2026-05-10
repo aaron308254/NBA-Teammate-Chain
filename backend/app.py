@@ -63,6 +63,15 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stat_events (
+                event_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "longest_chain" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN longest_chain INTEGER NOT NULL DEFAULT 0")
@@ -94,6 +103,7 @@ class StatsRequest(BaseModel):
     won: bool
     correct_answers: int = 0
     longest_chain: int = 0
+    event_id: str | None = None
 
 
 def verify_google_credential(credential: str) -> dict[str, Any]:
@@ -162,6 +172,41 @@ def leaderboard_response(user_id: str | None = None) -> dict[str, Any]:
         "top": [public_user(row, index + 1) for index, row in enumerate(top_rows)],
         "me": me if me and me["id"] not in top_ids else None,
     }
+
+
+def apply_stat_update(
+    conn: sqlite3.Connection,
+    user_id: str,
+    won: bool,
+    correct_answers: int,
+    longest_chain: int,
+    event_id: str | None = None,
+) -> sqlite3.Row | None:
+    if event_id:
+        inserted = conn.execute(
+            "INSERT OR IGNORE INTO stat_events (event_id, user_id, created_at) VALUES (?, ?, ?)",
+            (event_id, user_id, int(time.time())),
+        ).rowcount
+        if not inserted:
+            return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.execute(
+        """
+        UPDATE users
+        SET wins = wins + ?,
+            losses = losses + ?,
+            correct_answers = correct_answers + ?,
+            longest_chain = MAX(longest_chain, ?)
+        WHERE id = ?
+        """,
+        (
+            1 if won else 0,
+            0 if won else 1,
+            max(0, correct_answers),
+            max(0, longest_chain),
+            user_id,
+        ),
+    )
+    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
 @app.get("/api/bootstrap")
@@ -278,25 +323,15 @@ async def leaderboard(user_id: str | None = None) -> dict[str, Any]:
 @app.post("/api/stats")
 async def update_stats(request: StatsRequest) -> dict[str, Any]:
     with db() as conn:
-        conn.execute(
-            """
-            UPDATE users
-            SET wins = wins + ?,
-                losses = losses + ?,
-                correct_answers = correct_answers + ?,
-                longest_chain = MAX(longest_chain, ?)
-            WHERE id = ?
-            """,
-            (
-                1 if request.won else 0,
-                0 if request.won else 1,
-                max(0, request.correct_answers),
-                max(0, request.longest_chain),
-                request.user_id,
-            ),
+        row = apply_stat_update(
+            conn,
+            request.user_id,
+            request.won,
+            request.correct_answers,
+            request.longest_chain,
+            request.event_id,
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM users WHERE id = ?", (request.user_id,)).fetchone()
     return {"user": public_user(row), "leaderboard": leaderboard_response(request.user_id)}
 
 
@@ -308,6 +343,7 @@ class Seat:
     active: bool = True
     correct: int = 0
     eliminated_reason: str | None = None
+    stats_recorded: bool = False
 
 
 @dataclass
@@ -323,6 +359,7 @@ class Room:
     expires_at: float = 0
     timer_task: asyncio.Task[Any] | None = None
     finished: bool = False
+    users_by_seat_id: dict[str, Any] = field(default_factory=dict)
 
     def active_seats(self) -> list[Seat]:
         return [seat for seat in self.seats if seat.active]
@@ -393,6 +430,7 @@ def room_payload(room: Room, event: str = "state", message: str | None = None) -
         "roomId": room.id,
         "message": message,
         "seats": [seat.__dict__ for seat in room.seats],
+        "usersBySeatId": room.users_by_seat_id,
         "currentSeatId": room.current_seat().id if not room.finished else None,
         "currentTarget": room.current_target.model_dump(),
         "chain": [player.model_dump() for player in room.chain],
@@ -404,6 +442,34 @@ def room_payload(room: Room, event: str = "state", message: str | None = None) -
     }
 
 
+def record_seat_result(room: Room, seat: Seat, won: bool) -> None:
+    if seat.stats_recorded:
+        return
+    seat.stats_recorded = True
+    if not seat.user_id:
+        return
+    with db() as conn:
+        row = apply_stat_update(
+            conn,
+            seat.user_id,
+            won,
+            seat.correct,
+            len(room.chain),
+            f"room:{room.id}:seat:{seat.id}:{'win' if won else 'loss'}",
+        )
+        conn.commit()
+    if row:
+        room.users_by_seat_id[seat.id] = public_user(row)
+
+
+def eliminate_seat(room: Room, seat: Seat, reason: str) -> None:
+    if not seat.active:
+        return
+    seat.active = False
+    seat.eliminated_reason = reason
+    record_seat_result(room, seat, False)
+
+
 async def broadcast(room: Room, payload: dict[str, Any]) -> set[str]:
     dead_seat_ids: set[str] = set()
     for seat_id, socket in list(room.sockets.items()):
@@ -412,9 +478,8 @@ async def broadcast(room: Room, payload: dict[str, Any]) -> set[str]:
     for seat_id in dead_seat_ids:
         room.sockets.pop(seat_id, None)
         seat = next((item for item in room.seats if item.id == seat_id), None)
-        if seat and seat.active:
-            seat.active = False
-            seat.eliminated_reason = "disconnect"
+        if seat and seat.active and not room.finished:
+            eliminate_seat(room, seat, "disconnect")
     return dead_seat_ids
 
 
@@ -423,35 +488,12 @@ async def finish_room(room: Room) -> None:
     if room.timer_task and room.timer_task is not asyncio.current_task():
         room.timer_task.cancel()
     winner = room.active_seats()[0] if room.active_seats() else None
-    users_by_seat_id: dict[str, Any] = {}
-    with db() as conn:
-        for seat in room.seats:
-            if seat.user_id:
-                conn.execute(
-                    """
-                    UPDATE users
-                    SET wins = wins + ?,
-                        losses = losses + ?,
-                        correct_answers = correct_answers + ?,
-                        longest_chain = MAX(longest_chain, ?)
-                    WHERE id = ?
-                    """,
-                    (
-                        1 if winner and seat.id == winner.id else 0,
-                        0 if winner and seat.id == winner.id else 1,
-                        seat.correct,
-                        len(room.chain),
-                        seat.user_id,
-                    ),
-                )
-        conn.commit()
-        for seat in room.seats:
-            if seat.user_id:
-                row = conn.execute("SELECT * FROM users WHERE id = ?", (seat.user_id,)).fetchone()
-                if row:
-                    users_by_seat_id[seat.id] = public_user(row)
+    for seat in room.seats:
+        if seat is winner:
+            record_seat_result(room, seat, True)
+        elif not seat.stats_recorded:
+            record_seat_result(room, seat, False)
     payload = room_payload(room, "game_over")
-    payload["usersBySeatId"] = users_by_seat_id
     await broadcast(room, payload)
 
 
@@ -476,8 +518,7 @@ async def start_room_timer(room: Room) -> None:
         if room.finished:
             return
         seat = room.current_seat()
-        seat.active = False
-        seat.eliminated_reason = "time"
+        eliminate_seat(room, seat, "time")
         if len(room.active_seats()) <= 1:
             await finish_room(room)
             return
@@ -537,8 +578,7 @@ async def queue_socket(websocket: WebSocket) -> None:
                     or time.time() > turn_expires_at
                 ):
                     continue
-                seat.active = False
-                seat.eliminated_reason = "unknown"
+                eliminate_seat(room, seat, "unknown")
             elif match.id in room.used_player_ids:
                 await websocket.send_json({"event": "repeat", "player": match.model_dump()})
                 continue
@@ -551,8 +591,7 @@ async def queue_socket(websocket: WebSocket) -> None:
                     or time.time() > turn_expires_at
                 ):
                     continue
-                seat.active = False
-                seat.eliminated_reason = "not_current"
+                eliminate_seat(room, seat, "not_current")
             elif not (
                 nba.are_current_mode_teammates(room.current_target.id, match.id)
                 if room.current_only
@@ -566,8 +605,7 @@ async def queue_socket(websocket: WebSocket) -> None:
                     or time.time() > turn_expires_at
                 ):
                     continue
-                seat.active = False
-                seat.eliminated_reason = "wrong"
+                eliminate_seat(room, seat, "wrong")
             else:
                 if (
                     room.finished
@@ -600,8 +638,7 @@ async def queue_socket(websocket: WebSocket) -> None:
         if room and not room.finished:
             was_current = room.current_seat().id == seat.id
             room.sockets.pop(seat.id, None)
-            seat.active = False
-            seat.eliminated_reason = "disconnect"
+            eliminate_seat(room, seat, "disconnect")
             if len(room.active_seats()) <= 1:
                 await finish_room(room)
             elif was_current:
