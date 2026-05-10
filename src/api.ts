@@ -15,7 +15,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    const body = await response.text().catch(() => "");
+    throw new Error(`Request failed: ${response.status}${body ? ` ${body}` : ""}`);
   }
   return response.json() as Promise<T>;
 }
@@ -59,7 +60,14 @@ export async function fetchBotAnswer(playerId: number, usedIds: number[], curren
   return payload.player;
 }
 
-export async function updateStats(userId: string, won: boolean, correctAnswers: number, longestChain: number, eventId?: string) {
+export async function updateStats(
+  userId: string,
+  won: boolean,
+  correctAnswers: number,
+  longestChain: number,
+  eventId?: string,
+  username?: string
+) {
   return request<{ user: AppUser; leaderboard: Leaderboard }>("/api/stats", {
     method: "POST",
     body: JSON.stringify({
@@ -67,7 +75,8 @@ export async function updateStats(userId: string, won: boolean, correctAnswers: 
       won,
       correct_answers: correctAnswers,
       longest_chain: longestChain,
-      event_id: eventId
+      event_id: eventId,
+      username: username
     })
   });
 }

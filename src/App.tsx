@@ -36,6 +36,7 @@ type GameOutcome = "win" | "loss";
 type PendingStatEvent = {
   eventId: string;
   userId: string;
+  username?: string;
   won: boolean;
   correctAnswers: number;
   longestChain: number;
@@ -558,13 +559,14 @@ function Game({
     const event: PendingStatEvent = {
       eventId: statEventIdRef.current,
       userId: user.id,
+      username: user.username,
       won: outcome === "win",
       correctAnswers: humanCorrect,
       longestChain: state.chain.length
     };
     submittedStatsRef.current = true;
     queuePendingStat(event);
-    updateStats(event.userId, event.won, event.correctAnswers, event.longestChain, event.eventId)
+    updateStats(event.userId, event.won, event.correctAnswers, event.longestChain, event.eventId, event.username)
       .then((payload) => {
         clearPendingStat(event.eventId);
         onStats(payload.user, payload.leaderboard);
@@ -918,7 +920,7 @@ export default function App() {
     if (!user) return;
     const pending = readPendingStats().filter((event) => event.userId === user.id);
     pending.forEach((event) => {
-      updateStats(event.userId, event.won, event.correctAnswers, event.longestChain, event.eventId)
+      updateStats(event.userId, event.won, event.correctAnswers, event.longestChain, event.eventId, event.username)
         .then((payload) => {
           clearPendingStat(event.eventId);
           persistUser(payload.user);

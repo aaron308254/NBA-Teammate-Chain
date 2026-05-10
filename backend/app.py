@@ -104,6 +104,7 @@ class StatsRequest(BaseModel):
     correct_answers: int = 0
     longest_chain: int = 0
     event_id: str | None = None
+    username: str | None = None
 
 
 def verify_google_credential(credential: str) -> dict[str, Any]:
@@ -181,7 +182,13 @@ def apply_stat_update(
     correct_answers: int,
     longest_chain: int,
     event_id: str | None = None,
+    username: str | None = None,
 ) -> sqlite3.Row | None:
+    fallback_username = (username or "Player").strip()[:24] or "Player"
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, username, created_at) VALUES (?, ?, ?)",
+        (user_id, fallback_username, int(time.time())),
+    )
     if event_id:
         inserted = conn.execute(
             "INSERT OR IGNORE INTO stat_events (event_id, user_id, created_at) VALUES (?, ?, ?)",
@@ -330,6 +337,7 @@ async def update_stats(request: StatsRequest) -> dict[str, Any]:
             request.correct_answers,
             request.longest_chain,
             request.event_id,
+            request.username,
         )
         conn.commit()
     return {"user": public_user(row), "leaderboard": leaderboard_response(request.user_id)}
@@ -456,6 +464,7 @@ def record_seat_result(room: Room, seat: Seat, won: bool) -> None:
             seat.correct,
             len(room.chain),
             f"room:{room.id}:seat:{seat.id}:{'win' if won else 'loss'}",
+            seat.username,
         )
         conn.commit()
     if row:
